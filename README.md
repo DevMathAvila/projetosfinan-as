@@ -62,7 +62,9 @@ Para liberar outra pessoa:
 3. Informe o e-mail em `Convidar pessoa`.
 4. A pessoa cria conta com exatamente esse e-mail.
 
-Se a pessoa ja tiver conta, o convite adiciona esse usuario a familia imediatamente. Se ainda nao tiver, o convite fica pendente ate o cadastro.
+O convite nao envia e-mail automaticamente. Ele libera aquele e-mail no banco; envie o link do app manualmente para a pessoa criar a conta. Se a pessoa ja tiver conta, o convite adiciona esse usuario a familia imediatamente. Se ainda nao tiver, o convite fica pendente ate o cadastro.
+
+Se aparecer `email rate limit exceeded`, o limite de envio de e-mails do Supabase foi atingido. Aguarde alguns minutos ou desative temporariamente a confirmacao de e-mail em `Authentication > Providers > Email` durante os testes.
 
 ## Tipos TypeScript
 

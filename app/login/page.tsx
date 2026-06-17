@@ -48,7 +48,7 @@ export default function LoginPage() {
         setMessage("Enviamos o link de recuperacao para o e-mail informado.");
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Nao foi possivel continuar.");
+      setMessage(getAuthErrorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -108,4 +108,24 @@ export default function LoginPage() {
       </Card>
     </main>
   );
+}
+
+function getAuthErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message && error.message !== "{}") {
+    if (error.message.toLowerCase().includes("email rate limit exceeded")) {
+      return "Limite de envio de e-mails do Supabase atingido. Aguarde alguns minutos antes de tentar de novo, ou desative temporariamente a confirmacao de e-mail em Authentication > Providers > Email.";
+    }
+
+    if (error.message.toLowerCase().includes("database error saving new user")) {
+      return "Cadastro bloqueado. Se ja existe uma familia criada, peca um convite antes de cadastrar este e-mail.";
+    }
+
+    return error.message;
+  }
+
+  if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string" && error.message !== "{}") {
+    return error.message;
+  }
+
+  return "Nao foi possivel criar a conta. Se ja existe uma familia criada, peca um convite antes de cadastrar este e-mail.";
 }

@@ -21,6 +21,7 @@ import {
   getSessionUser,
   saveSettings,
   toggleBillPaid,
+  type AccessInvite,
   type Bill,
   type Client,
   type Expense,
@@ -51,6 +52,7 @@ export function DashboardApp() {
   const [filterUser, setFilterUser] = useState("all");
   const [sort, setSort] = useState<Sort>("recent");
   const [memberEmail, setMemberEmail] = useState("");
+  const [inviteMessage, setInviteMessage] = useState("");
 
   const userQuery = useQuery({ queryKey: ["user"], queryFn: () => getSessionUser(supabase), retry: false });
   const overviewQuery = useQuery({
@@ -193,22 +195,6 @@ export function DashboardApp() {
               </div>
               <ExpenseList expenses={filteredExpenses} />
             </Card>
-            <Card>
-              <h2 className="mb-4 text-lg font-bold">Convidar pessoa</h2>
-              <form
-                className="flex gap-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  mutation.mutate(async () => {
-                    await inviteMemberByEmail(supabase, memberEmail);
-                    setMemberEmail("");
-                  });
-                }}
-              >
-                <Input type="email" placeholder="email@familia.com" value={memberEmail} onChange={(event) => setMemberEmail(event.target.value)} required />
-                <Button disabled={mutation.isPending || !memberEmail}><Plus size={18} /></Button>
-              </form>
-            </Card>
           </div>
         )}
 
@@ -272,6 +258,27 @@ export function DashboardApp() {
                 <Label>Limite mensal<Input type="number" step="0.01" {...settingsForm.register("monthly_limit")} /></Label>
                 <Button className="w-full" disabled={mutation.isPending}>Salvar ajustes</Button>
               </form>
+            </Card>
+            <Card>
+              <h2 className="mb-4 text-lg font-bold">Convidar pessoa</h2>
+              <form
+                className="space-y-3"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  mutation.mutate(async () => {
+                    await inviteMemberByEmail(supabase, memberEmail);
+                    setInviteMessage(`${memberEmail} foi liberado para criar conta. O convite nao envia e-mail automaticamente; envie o link do app para essa pessoa se cadastrar com esse mesmo e-mail.`);
+                    setMemberEmail("");
+                  });
+                }}
+              >
+                <div className="flex gap-2">
+                  <Input type="email" placeholder="email@familia.com" value={memberEmail} onChange={(event) => setMemberEmail(event.target.value)} required />
+                  <Button disabled={mutation.isPending || !memberEmail}><Plus size={18} /></Button>
+                </div>
+                {inviteMessage && <p className="rounded-lg bg-green-50 p-3 text-sm font-medium text-good">{inviteMessage}</p>}
+              </form>
+              <InviteList invites={overview.invites} />
             </Card>
             <Card>
               <h2 className="mb-4 flex items-center gap-2 text-lg font-bold"><Tags size={20} />Categorias</h2>
@@ -423,6 +430,31 @@ function BillList({ bills, onToggle }: { bills: Bill[]; onToggle: (bill: Bill) =
               <p className="font-bold">{currency.format(Number(bill.value))}</p>
               <GhostButton className="mt-1 !min-h-9 px-3 py-1 text-xs" onClick={() => onToggle(bill)}>{bill.paid ? "Desmarcar" : "Pagar"}</GhostButton>
             </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function InviteList({ invites }: { invites: AccessInvite[] }) {
+  if (!invites.length) {
+    return <p className="mt-4 text-sm text-zinc-500">Nenhum convite enviado ainda.</p>;
+  }
+
+  return (
+    <div className="mt-4 divide-y divide-line">
+      {invites.map((invite) => {
+        const accepted = Boolean(invite.accepted_at);
+        return (
+          <div key={invite.id} className="flex items-center justify-between gap-3 py-3">
+            <div>
+              <p className="font-semibold">{invite.email}</p>
+              <p className="text-xs text-zinc-500">Convidado em {shortDate.format(new Date(invite.created_at))}</p>
+            </div>
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${accepted ? "bg-green-50 text-good" : "bg-yellow-50 text-warn"}`}>
+              {accepted ? "Aceito" : "Pendente"}
+            </span>
           </div>
         );
       })}
