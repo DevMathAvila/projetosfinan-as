@@ -80,8 +80,8 @@ export async function deleteCategory(supabase: Client, categoryId: string) {
   if (error) throw error;
 }
 
-export async function addMemberByEmail(supabase: Client, email: string) {
-  const { error } = await supabase.rpc("add_household_member_by_email", { target_email: email.trim().toLowerCase() });
+export async function inviteMemberByEmail(supabase: Client, email: string) {
+  const { error } = await supabase.rpc("invite_household_member_by_email", { target_email: email.trim().toLowerCase() });
   if (error) throw error;
 }
 

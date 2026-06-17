@@ -14,7 +14,7 @@ import {
   addCategory,
   addExpense,
   addInstallment,
-  addMemberByEmail,
+  inviteMemberByEmail,
   closeCycle,
   deleteCategory,
   getOverview,
@@ -194,13 +194,13 @@ export function DashboardApp() {
               <ExpenseList expenses={filteredExpenses} />
             </Card>
             <Card>
-              <h2 className="mb-4 text-lg font-bold">Compartilhar familia</h2>
+              <h2 className="mb-4 text-lg font-bold">Convidar pessoa</h2>
               <form
                 className="flex gap-2"
                 onSubmit={(event) => {
                   event.preventDefault();
                   mutation.mutate(async () => {
-                    await addMemberByEmail(supabase, memberEmail);
+                    await inviteMemberByEmail(supabase, memberEmail);
                     setMemberEmail("");
                   });
                 }}

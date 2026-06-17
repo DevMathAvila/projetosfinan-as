@@ -13,7 +13,8 @@ Aplicacao web mobile-first para controle financeiro familiar com Next.js, React,
 - Fechamento de fatura com historico de ciclos.
 - Contas fixas com totais pagos, pendentes, vencimentos proximos e atrasos.
 - Relatorio por categoria com total, percentual e quantidade.
-- Compartilhamento familiar por e-mail para marido/esposa usarem os mesmos dados.
+- Cadastro privado: depois do primeiro usuario, novas contas precisam de convite por e-mail.
+- Compartilhamento familiar por convite para marido/esposa usarem os mesmos dados.
 
 ## Stack
 
@@ -48,7 +49,20 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
    - Site URL: URL local ou Vercel.
    - Redirect URL: `https://seu-dominio.vercel.app/auth/callback`.
 
-O SQL cria tabelas, triggers, RLS, politicas de seguranca, categorias iniciais, ciclo inicial e a funcao de compartilhamento por e-mail.
+O SQL cria tabelas, triggers, RLS, politicas de seguranca, categorias iniciais, ciclo inicial e o fluxo de convite por e-mail.
+
+## Acesso privado
+
+O primeiro cadastro cria a familia inicial. Depois disso, qualquer novo cadastro sem convite e bloqueado pelo trigger `handle_new_user`.
+
+Para liberar outra pessoa:
+
+1. Entre no app com o usuario principal.
+2. Abra `Ajustes`.
+3. Informe o e-mail em `Convidar pessoa`.
+4. A pessoa cria conta com exatamente esse e-mail.
+
+Se a pessoa ja tiver conta, o convite adiciona esse usuario a familia imediatamente. Se ainda nao tiver, o convite fica pendente ate o cadastro.
 
 ## Tipos TypeScript
 

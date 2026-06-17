@@ -30,6 +30,16 @@ create table if not exists public.household_members (
   primary key (household_id, user_id)
 );
 
+create table if not exists public.access_invites (
+  id uuid primary key default gen_random_uuid(),
+  household_id uuid not null references public.households(id) on delete cascade,
+  email text not null,
+  invited_by uuid not null references public.profiles(id),
+  accepted_at timestamptz,
+  created_at timestamptz not null default now(),
+  unique (household_id, email)
+);
+
 create table if not exists public.settings (
   id uuid primary key default gen_random_uuid(),
   household_id uuid not null references public.households(id) on delete cascade unique,
@@ -131,9 +141,35 @@ set search_path = public
 as $$
 declare
   new_household uuid;
+  invited_household uuid;
 begin
+  select household_id into invited_household
+  from public.access_invites
+  where lower(email) = lower(new.email)
+    and accepted_at is null
+  order by created_at desc
+  limit 1;
+
+  if invited_household is null and exists (select 1 from public.profiles) then
+    raise exception 'Cadastro fechado. Peca convite ao dono da familia.';
+  end if;
+
   insert into public.profiles (id, email, name)
   values (new.id, new.email, coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)));
+
+  if invited_household is not null then
+    insert into public.household_members (household_id, user_id, role)
+    values (invited_household, new.id, 'member')
+    on conflict (household_id, user_id) do nothing;
+
+    update public.access_invites
+    set accepted_at = now()
+    where household_id = invited_household
+      and lower(email) = lower(new.email)
+      and accepted_at is null;
+
+    return new;
+  end if;
 
   insert into public.households (name, created_by)
   values ('Familia', new.id)
@@ -180,7 +216,7 @@ create trigger expenses_total_after_change
 after insert or update or delete on public.expenses
 for each row execute function public.update_cycle_total();
 
-create or replace function public.add_household_member_by_email(target_email text)
+create or replace function public.invite_household_member_by_email(target_email text)
 returns void
 language plpgsql
 security definer
@@ -190,15 +226,6 @@ declare
   target_user uuid;
   current_household uuid;
 begin
-  select id into target_user
-  from public.profiles
-  where lower(email) = lower(target_email)
-  limit 1;
-
-  if target_user is null then
-    raise exception 'Usuario nao encontrado. A pessoa precisa criar conta primeiro.';
-  end if;
-
   select household_id into current_household
   from public.household_members
   where user_id = auth.uid()
@@ -208,15 +235,37 @@ begin
     raise exception 'Familia nao encontrada para o usuario atual.';
   end if;
 
-  insert into public.household_members (household_id, user_id, role)
-  values (current_household, target_user, 'member')
-  on conflict (household_id, user_id) do nothing;
+  insert into public.access_invites (household_id, email, invited_by)
+  values (current_household, lower(target_email), auth.uid())
+  on conflict (household_id, email) do update
+  set invited_by = excluded.invited_by,
+      accepted_at = null,
+      created_at = now();
+
+  select id into target_user
+  from public.profiles
+  where lower(email) = lower(target_email)
+  limit 1;
+
+  if target_user is not null then
+    insert into public.household_members (household_id, user_id, role)
+    values (current_household, target_user, 'member')
+    on conflict (household_id, user_id) do nothing;
+
+    update public.access_invites
+    set accepted_at = now()
+    where household_id = current_household
+      and lower(email) = lower(target_email);
+  end if;
 end;
 $$;
+
+drop function if exists public.add_household_member_by_email(text);
 
 alter table public.profiles enable row level security;
 alter table public.households enable row level security;
 alter table public.household_members enable row level security;
+alter table public.access_invites enable row level security;
 alter table public.settings enable row level security;
 alter table public.categories enable row level security;
 alter table public.billing_cycles enable row level security;
@@ -231,6 +280,7 @@ drop policy if exists "households member read" on public.households;
 drop policy if exists "households owner update" on public.households;
 drop policy if exists "members read own households" on public.household_members;
 drop policy if exists "members owner insert" on public.household_members;
+drop policy if exists "invites member all" on public.access_invites;
 drop policy if exists "settings member all" on public.settings;
 drop policy if exists "categories member all" on public.categories;
 drop policy if exists "cycles member all" on public.billing_cycles;
@@ -247,6 +297,7 @@ create policy "households owner update" on public.households for update using (c
 
 create policy "members read own households" on public.household_members for select using (public.is_household_member(household_id));
 create policy "members owner insert" on public.household_members for insert with check (public.is_household_member(household_id));
+create policy "invites member all" on public.access_invites for all using (public.is_household_member(household_id)) with check (public.is_household_member(household_id));
 
 create policy "settings member all" on public.settings for all using (public.is_household_member(household_id)) with check (public.is_household_member(household_id));
 create policy "categories member all" on public.categories for all using (public.is_household_member(household_id)) with check (public.is_household_member(household_id));

@@ -21,6 +21,12 @@ export type Database = {
         Update: { role?: "owner" | "member" };
         Relationships: [];
       };
+      access_invites: {
+        Row: { id: string; household_id: string; email: string; invited_by: string; accepted_at: string | null; created_at: string };
+        Insert: { id?: string; household_id: string; email: string; invited_by: string; accepted_at?: string | null; created_at?: string };
+        Update: { accepted_at?: string | null };
+        Relationships: [];
+      };
       settings: {
         Row: { id: string; household_id: string; payment_day: number; monthly_limit: number; created_at: string; updated_at: string };
         Insert: { id?: string; household_id: string; payment_day: number; monthly_limit: number; created_at?: string; updated_at?: string };
