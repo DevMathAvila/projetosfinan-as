@@ -51,6 +51,18 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 
 O SQL cria tabelas, triggers, RLS, politicas de seguranca, categorias iniciais, ciclo inicial e o fluxo de convite por e-mail.
 
+## Migracoes
+
+Se o banco ja existe e possui dados reais, nao apague nem recrie as tabelas. Rode apenas os arquivos novos dentro de `supabase/migrations`, em ordem.
+
+Migracao atual:
+
+```text
+supabase/migrations/202606180001_finance_adjustments.sql
+```
+
+Ela apenas adiciona campo opcional de observacoes em parcelas e indices de consulta. Nenhum registro existente e apagado ou recalculado.
+
 ## Acesso privado
 
 O primeiro cadastro cria a familia inicial. Depois disso, qualquer novo cadastro sem convite e bloqueado pelo trigger `handle_new_user`.

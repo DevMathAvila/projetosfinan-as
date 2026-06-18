@@ -95,6 +95,7 @@ create table if not exists public.installments (
   total_installments integer not null check (total_installments > 1),
   start_date date not null,
   active boolean not null default true,
+  notes text,
   created_by uuid not null references public.profiles(id),
   created_at timestamptz not null default now()
 );
@@ -105,6 +106,7 @@ create table if not exists public.bills (
   name text not null,
   value numeric(12,2) not null check (value > 0),
   due_date date not null,
+  due_day integer not null default 1 check (due_day between 1 and 31),
   paid boolean not null default false,
   notes text,
   created_by uuid not null references public.profiles(id),
@@ -119,6 +121,18 @@ create table if not exists public.bill_payments (
   value numeric(12,2) not null check (value > 0),
   created_at timestamptz not null default now()
 );
+
+create index if not exists expenses_household_expense_date_idx
+on public.expenses (household_id, expense_date);
+
+create index if not exists bills_household_due_date_idx
+on public.bills (household_id, due_date);
+
+create index if not exists installments_household_active_start_date_idx
+on public.installments (household_id, active, start_date);
+
+create index if not exists access_invites_household_created_at_idx
+on public.access_invites (household_id, created_at desc);
 
 create or replace function public.is_household_member(target_household uuid)
 returns boolean
@@ -179,7 +193,7 @@ begin
   values (new_household, new.id, 'owner');
 
   insert into public.settings (household_id, payment_day, monthly_limit)
-  values (new_household, 9, 3500);
+  values (new_household, 10, 3500);
 
   insert into public.billing_cycles (household_id, start_date, monthly_limit)
   values (new_household, current_date, 3500);

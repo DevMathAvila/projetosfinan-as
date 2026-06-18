@@ -1,6 +1,7 @@
-import { addMonths, format, lastDayOfMonth } from "date-fns";
+import { addMonths, format } from "date-fns";
 import type { User } from "@supabase/supabase-js";
 import type { Database } from "@/lib/database.types";
+import { dateInputToISOString } from "@/lib/format";
 import type { BillForm, CategoryForm, ExpenseForm, InstallmentForm, SettingsForm } from "@/lib/schemas";
 import type { createClient } from "@/lib/supabase";
 
@@ -95,65 +96,142 @@ export async function addExpense(supabase: Client, householdId: string, cycleId:
     category_id: expense.category_id,
     created_by: user.id,
     value: expense.value,
-    description: expense.description.trim(),
-    expense_date: new Date(expense.expense_date).toISOString(),
+    description: expense.description?.trim() || null,
+    expense_date: dateInputToISOString(expense.expense_date),
   });
+  if (error) throw error;
+}
+
+export async function updateExpense(supabase: Client, expenseId: string, expense: ExpenseForm) {
+  const { error } = await supabase
+    .from("expenses")
+    .update({
+      category_id: expense.category_id,
+      value: expense.value,
+      description: expense.description?.trim() || null,
+      expense_date: dateInputToISOString(expense.expense_date),
+    })
+    .eq("id", expenseId);
+  if (error) throw error;
+}
+
+export async function deleteExpense(supabase: Client, expenseId: string) {
+  const { error } = await supabase.from("expenses").delete().eq("id", expenseId);
   if (error) throw error;
 }
 
 export async function addInstallment(supabase: Client, householdId: string, user: User, installment: InstallmentForm) {
-  const installmentValue = Number((installment.total_value / installment.total_installments).toFixed(2));
+  const totalValue = Number((installment.installment_value * installment.total_installments).toFixed(2));
   const { error } = await supabase.from("installments").insert({
     household_id: householdId,
     created_by: user.id,
     name: installment.name.trim(),
-    total_value: installment.total_value,
-    installment_value: installmentValue,
+    total_value: totalValue,
+    installment_value: installment.installment_value,
+    current_installment: installment.current_installment,
     total_installments: installment.total_installments,
     start_date: installment.start_date,
+    notes: installment.notes?.trim() || null,
   });
   if (error) throw error;
 }
 
+export async function updateInstallment(supabase: Client, installmentId: string, installment: InstallmentForm) {
+  const totalValue = Number((installment.installment_value * installment.total_installments).toFixed(2));
+  const { error } = await supabase
+    .from("installments")
+    .update({
+      name: installment.name.trim(),
+      total_value: totalValue,
+      installment_value: installment.installment_value,
+      current_installment: installment.current_installment,
+      total_installments: installment.total_installments,
+      start_date: installment.start_date,
+      notes: installment.notes?.trim() || null,
+      active: installment.current_installment <= installment.total_installments,
+    })
+    .eq("id", installmentId);
+  if (error) throw error;
+}
+
+export async function deleteInstallment(supabase: Client, installmentId: string) {
+  const { error } = await supabase.from("installments").delete().eq("id", installmentId);
+  if (error) throw error;
+}
+
 export async function addBill(supabase: Client, householdId: string, user: User, bill: BillForm) {
+  const dueDate = new Date(`${bill.due_date}T00:00:00`);
   const { error } = await supabase.from("bills").insert({
     household_id: householdId,
     created_by: user.id,
     name: bill.name.trim(),
     value: bill.value,
     due_date: bill.due_date,
+    due_day: dueDate.getDate(),
     notes: bill.notes?.trim() || null,
   });
   if (error) throw error;
 }
 
-export async function toggleBillPaid(supabase: Client, bill: Bill) {
-  const { error } = await supabase.from("bills").update({ paid: !bill.paid }).eq("id", bill.id);
+export async function updateBill(supabase: Client, billId: string, bill: BillForm) {
+  const dueDate = new Date(`${bill.due_date}T00:00:00`);
+  const { error } = await supabase
+    .from("bills")
+    .update({
+      name: bill.name.trim(),
+      value: bill.value,
+      due_date: bill.due_date,
+      due_day: dueDate.getDate(),
+      notes: bill.notes?.trim() || null,
+    })
+    .eq("id", billId);
   if (error) throw error;
+}
 
+export async function deleteBill(supabase: Client, billId: string) {
+  const { error } = await supabase.from("bills").delete().eq("id", billId);
+  if (error) throw error;
+}
+
+export async function toggleBillPaid(supabase: Client, bill: Bill) {
   if (!bill.paid) {
-    await supabase.from("bill_payments").insert({
+    const paymentResult = await supabase.from("bill_payments").insert({
       household_id: bill.household_id,
       bill_id: bill.id,
       payment_date: format(new Date(), "yyyy-MM-dd"),
       value: bill.value,
     });
+    if (paymentResult.error) throw paymentResult.error;
+
+    const { error } = await supabase
+      .from("bills")
+      .update({ paid: false, due_date: format(getNextBillDueDate(bill), "yyyy-MM-dd") })
+      .eq("id", bill.id);
+    if (error) throw error;
+    return;
   }
+
+  const { error } = await supabase.from("bills").update({ paid: false }).eq("id", bill.id);
+  if (error) throw error;
 }
 
-export async function closeCycle(supabase: Client, cycle: Cycle, monthlyLimit: number) {
-  const nextStart = addMonths(new Date(cycle.start_date), 1);
+export async function payAllBills(supabase: Client, bills: Bill[]) {
+  const pendingBills = bills.filter((bill) => !bill.paid);
+  await Promise.all(pendingBills.map((bill) => toggleBillPaid(supabase, bill)));
+}
+
+export async function payCardCycle(supabase: Client, cycle: Cycle, monthlyLimit: number, nextStartDate: Date) {
   const { error: closeError } = await supabase
     .from("billing_cycles")
-    .update({ closed: true, end_date: format(lastDayOfMonth(new Date()), "yyyy-MM-dd") })
+    .update({ closed: true, end_date: format(nextStartDate, "yyyy-MM-dd") })
     .eq("id", cycle.id);
   if (closeError) throw closeError;
 
-  const { data: newCycle, error: createError } = await supabase.from("billing_cycles").insert({
+  const { error: createError } = await supabase.from("billing_cycles").insert({
     household_id: cycle.household_id,
-    start_date: format(nextStart, "yyyy-MM-dd"),
+    start_date: format(nextStartDate, "yyyy-MM-dd"),
     monthly_limit: monthlyLimit,
-  }).select("*").single();
+  });
   if (createError) throw createError;
 
   const { data: activeInstallments, error: installmentsError } = await supabase
@@ -163,22 +241,9 @@ export async function closeCycle(supabase: Client, cycle: Cycle, monthlyLimit: n
     .eq("active", true);
   if (installmentsError) throw installmentsError;
 
-  const installmentCategory = await ensureInstallmentCategory(supabase, cycle.household_id);
   const installments = (activeInstallments ?? []) as Installment[];
-  const rows = installments
-    .filter((item) => item.current_installment <= item.total_installments)
-    .map((item) => ({
-      household_id: cycle.household_id,
-      cycle_id: newCycle.id,
-      category_id: installmentCategory?.id ?? null,
-      created_by: item.created_by,
-      value: item.installment_value,
-      description: `${item.name} (${item.current_installment}/${item.total_installments})`,
-      expense_date: new Date().toISOString(),
-    }));
 
-  if (rows.length) {
-    await supabase.from("expenses").insert(rows);
+  if (installments.length) {
     await Promise.all(
       installments.map((item) =>
         supabase
@@ -190,7 +255,13 @@ export async function closeCycle(supabase: Client, cycle: Cycle, monthlyLimit: n
   }
 }
 
-async function ensureInstallmentCategory(supabase: Client, householdId: string) {
-  const { data } = await supabase.from("categories").select("*").eq("household_id", householdId).eq("name", "Parcelas").maybeSingle();
-  return data;
+function getNextBillDueDate(bill: Bill) {
+  const currentDueDate = new Date(`${bill.due_date}T00:00:00`);
+  return makeBillDate(currentDueDate.getFullYear(), currentDueDate.getMonth() + 1, bill.due_day ?? currentDueDate.getDate());
+}
+
+function makeBillDate(year: number, month: number, dueDay: number) {
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return new Date(year, month, Math.min(dueDay, lastDay));
 }

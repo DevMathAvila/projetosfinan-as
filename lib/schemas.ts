@@ -20,15 +20,20 @@ export const categorySchema = z.object({
 export const expenseSchema = z.object({
   value: money,
   category_id: z.string().min(1, "Escolha uma categoria."),
-  description: z.string().min(2, "Descreva o gasto."),
+  description: z.string().optional(),
   expense_date: z.string().min(1, "Informe a data."),
 });
 
 export const installmentSchema = z.object({
   name: z.string().min(2, "Informe o nome da compra."),
-  total_value: money,
+  installment_value: money,
   total_installments: z.coerce.number().int().min(2),
+  current_installment: z.coerce.number().int().min(1),
   start_date: z.string().min(1),
+  notes: z.string().optional(),
+}).refine((data) => data.current_installment <= data.total_installments, {
+  message: "A parcela atual nao pode ser maior que o total.",
+  path: ["current_installment"],
 });
 
 export const billSchema = z.object({

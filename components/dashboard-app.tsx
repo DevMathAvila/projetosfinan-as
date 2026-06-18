@@ -1,9 +1,9 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { addMonths, format, isBefore, parseISO } from "date-fns";
+import { addMonths, endOfMonth, format, isAfter, isBefore, isWithinInterval, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { BarChart3, CalendarCheck, CreditCard, ListFilter, LogOut, Plus, ReceiptText, Settings, Tags, Trash2 } from "lucide-react";
+import { BarChart3, CalendarCheck, CreditCard, ListFilter, LogOut, Pencil, Plus, ReceiptText, Settings, Tags, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
@@ -14,20 +14,27 @@ import {
   addCategory,
   addExpense,
   addInstallment,
-  inviteMemberByEmail,
-  closeCycle,
+  deleteBill,
   deleteCategory,
+  deleteExpense,
+  deleteInstallment,
   getOverview,
   getSessionUser,
+  inviteMemberByEmail,
+  payAllBills,
+  payCardCycle,
   saveSettings,
   toggleBillPaid,
+  updateBill,
+  updateExpense,
+  updateInstallment,
   type AccessInvite,
   type Bill,
   type Client,
   type Expense,
   type Installment,
 } from "@/lib/finance";
-import { currency, shortDate, shortTime, toDateInput } from "@/lib/format";
+import { currency, dateOnlyFromStored, shortDate, shortTime, toDateInput } from "@/lib/format";
 import { billSchema, categorySchema, expenseSchema, installmentSchema, settingsSchema, type BillForm, type CategoryForm, type ExpenseForm, type InstallmentForm, type SettingsForm } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase";
 
@@ -53,6 +60,9 @@ export function DashboardApp() {
   const [sort, setSort] = useState<Sort>("recent");
   const [memberEmail, setMemberEmail] = useState("");
   const [inviteMessage, setInviteMessage] = useState("");
+  const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
+  const [editingInstallmentId, setEditingInstallmentId] = useState<string | null>(null);
+  const [editingBillId, setEditingBillId] = useState<string | null>(null);
 
   const userQuery = useQuery({ queryKey: ["user"], queryFn: () => getSessionUser(supabase), retry: false });
   const overviewQuery = useQuery({
@@ -72,7 +82,7 @@ export function DashboardApp() {
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["overview"] });
   const expenseForm = useForm<ExpenseForm>({ resolver: zodResolver(expenseSchema), defaultValues: { value: 0, category_id: "", description: "", expense_date: toDateInput() } });
   const categoryForm = useForm<CategoryForm>({ resolver: zodResolver(categorySchema), defaultValues: { name: "" } });
-  const installmentForm = useForm<InstallmentForm>({ resolver: zodResolver(installmentSchema), defaultValues: { name: "", total_value: 0, total_installments: 2, start_date: toDateInput() } });
+  const installmentForm = useForm<InstallmentForm>({ resolver: zodResolver(installmentSchema), defaultValues: { name: "", installment_value: 0, total_installments: 2, current_installment: 1, start_date: toDateInput(), notes: "" } });
   const billForm = useForm<BillForm>({ resolver: zodResolver(billSchema), defaultValues: { name: "", value: 0, due_date: toDateInput(), notes: "" } });
   const settingsForm = useForm<SettingsForm>({ resolver: zodResolver(settingsSchema), values: overview ? { payment_day: overview.settings.payment_day, monthly_limit: overview.settings.monthly_limit } : undefined });
 
@@ -89,8 +99,13 @@ export function DashboardApp() {
     return <main className="grid min-h-screen place-items-center bg-mist p-6 text-sm font-semibold text-zinc-600">Abrindo sessao...</main>;
   }
 
-  const spent = Number(overview.cycle.total_spent);
-  const limit = Number(overview.cycle.monthly_limit);
+  const cardCycle = getCardCycleRange(overview.settings.payment_day);
+  const monthlyFinance = getMonthlyFinance(overview.expenses, overview.bills, overview.installments, cardCycle);
+  const cardUpcomingItems = getCardUpcomingItems(overview.expenses, overview.installments, cardCycle);
+  const cardCommitment = getCardCommitment(overview.installments);
+  const cardOverdue = isAfter(startOfDay(new Date()), cardCycle.end);
+  const spent = monthlyFinance.cardTotal;
+  const limit = Number(overview.settings.monthly_limit);
   const remaining = limit - spent;
   const percent = limit > 0 ? Math.round((spent / limit) * 100) : 0;
   const alert = getLimitAlert(percent, remaining, overview.expenses);
@@ -122,17 +137,24 @@ export function DashboardApp() {
       </header>
 
       <div className="mx-auto max-w-5xl space-y-4 p-4">
+        {mutation.isError && (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-danger">
+            {mutation.error instanceof Error ? mutation.error.message : "Nao foi possivel salvar a alteracao."}
+          </div>
+        )}
+
         {tab === "home" && (
           <>
             <Card>
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-sm text-zinc-500">Ciclo atual</p>
+                  <p className="text-sm text-zinc-500">Ciclo atual: {shortDate.format(cardCycle.start)} ate {shortDate.format(cardCycle.end)}</p>
                   <h2 className="text-2xl font-bold">{percent}% utilizado</h2>
+                  {cardOverdue && <p className="mt-1 text-sm font-semibold text-danger">Cartao em atraso. Pague para abrir o proximo ciclo.</p>}
                 </div>
-                <Button onClick={() => setTab("expenses")}>
-                  <Plus size={18} />
-                  Gasto
+                <Button onClick={() => mutation.mutate(() => payCardCycle(supabase, overview.cycle, overview.settings.monthly_limit, cardCycle.end))}>
+                  <CreditCard size={18} />
+                  Pagar cartao
                 </Button>
               </div>
               <div className="mt-4 h-3 overflow-hidden rounded-full bg-mist">
@@ -143,15 +165,33 @@ export function DashboardApp() {
 
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <Stat label="Limite mensal" value={currency.format(limit)} />
-              <Stat label="Valor gasto" value={currency.format(spent)} tone={percent >= 100 ? "danger" : "default"} />
+              <Stat label="Fatura atual" value={currency.format(spent)} tone={percent >= 100 ? "danger" : "default"} />
               <Stat label="Restante" value={currency.format(remaining)} tone={remaining >= 0 ? "good" : "danger"} />
-              <Stat label="Contas pendentes" value={currency.format(billTotals.pending)} tone={billTotals.pending > 0 ? "warn" : "good"} />
+              <Stat label="Cartao comprometido" value={currency.format(cardCommitment)} tone={cardCommitment > 0 ? "warn" : "good"} />
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-3">
+              <button className="text-left" onClick={() => setTab("installments")}>
+                <Stat label="Parcelas Cartao" value={currency.format(monthlyFinance.installmentsTotal)} />
+              </button>
+              <button className="text-left" onClick={() => setTab("expenses")}>
+                <Stat label="Gastos do cartao" value={currency.format(monthlyFinance.expensesTotal)} />
+              </button>
+              <button className="text-left" onClick={() => setTab("bills")}>
+                <Stat label="Contas" value={currency.format(billTotals.total)} />
+              </button>
             </div>
 
             <Card>
-              <h2 className="mb-3 text-lg font-bold">Proximos vencimentos</h2>
-              <BillList bills={overview.bills.slice(0, 5)} onToggle={(bill) => mutation.mutate(() => toggleBillPaid(supabase, bill))} />
+              <h2 className="mb-3 text-lg font-bold">Vencimentos do cartao</h2>
+              <UpcomingList items={cardUpcomingItems} />
             </Card>
+
+            <Card>
+              <h2 className="mb-3 text-lg font-bold">Contas</h2>
+              <BillList bills={overview.bills} onToggle={(bill) => mutation.mutate(() => toggleBillPaid(supabase, bill))} />
+            </Card>
+
           </>
         )}
 
@@ -163,7 +203,12 @@ export function DashboardApp() {
                 className="space-y-3"
                 onSubmit={expenseForm.handleSubmit((values) =>
                   mutation.mutate(async () => {
-                    await addExpense(supabase, overview.household.id, overview.cycle.id, user, values);
+                    if (editingExpenseId) {
+                      await updateExpense(supabase, editingExpenseId, values);
+                      setEditingExpenseId(null);
+                    } else {
+                      await addExpense(supabase, overview.household.id, overview.cycle.id, user, values);
+                    }
                     expenseForm.reset({ value: 0, category_id: "", description: "", expense_date: toDateInput() });
                   }),
                 )}
@@ -172,7 +217,10 @@ export function DashboardApp() {
                 <Label>Categoria<Select {...expenseForm.register("category_id")}><option value="">Selecione</option>{overview.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</Select></Label>
                 <Label>Descricao<Input placeholder="Pao e leite" {...expenseForm.register("description")} /></Label>
                 <Label>Data<Input type="date" {...expenseForm.register("expense_date")} /></Label>
-                <Button className="w-full" disabled={mutation.isPending}><Plus size={18} />Salvar gasto</Button>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button className="w-full" disabled={mutation.isPending}><Plus size={18} />{editingExpenseId ? "Atualizar gasto" : "Salvar gasto"}</Button>
+                  {editingExpenseId && <GhostButton type="button" onClick={() => { setEditingExpenseId(null); expenseForm.reset({ value: 0, category_id: "", description: "", expense_date: toDateInput() }); }}>Cancelar</GhostButton>}
+                </div>
               </form>
             </Card>
 
@@ -193,7 +241,23 @@ export function DashboardApp() {
                   <option value="lowest">Menor valor</option>
                 </Select>
               </div>
-              <ExpenseList expenses={filteredExpenses} />
+              <ExpenseList
+                expenses={filteredExpenses}
+                onEdit={(expense) => {
+                  setEditingExpenseId(expense.id);
+                  expenseForm.reset({
+                    value: Number(expense.value),
+                    category_id: expense.category_id ?? "",
+                    description: expense.description ?? "",
+                    expense_date: toDateInput(dateOnlyFromStored(expense.expense_date)),
+                  });
+                }}
+                onDelete={(expense) => {
+                  if (window.confirm("Excluir este gasto?")) {
+                    mutation.mutate(() => deleteExpense(supabase, expense.id));
+                  }
+                }}
+              />
             </Card>
           </div>
         )}
@@ -202,15 +266,57 @@ export function DashboardApp() {
           <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
             <Card>
               <h2 className="mb-4 text-lg font-bold">Compra parcelada</h2>
-              <form className="space-y-3" onSubmit={installmentForm.handleSubmit((values) => mutation.mutate(() => addInstallment(supabase, overview.household.id, user, values)))}>
+              <form
+                className="space-y-3"
+                onSubmit={installmentForm.handleSubmit((values) =>
+                  mutation.mutate(async () => {
+                    if (editingInstallmentId) {
+                      await updateInstallment(supabase, editingInstallmentId, values);
+                      setEditingInstallmentId(null);
+                    } else {
+                      await addInstallment(supabase, overview.household.id, user, values);
+                    }
+                    installmentForm.reset({ name: "", installment_value: 0, total_installments: 2, current_installment: 1, start_date: toDateInput(), notes: "" });
+                  }),
+                )}
+              >
                 <Label>Nome<Input placeholder="Notebook" {...installmentForm.register("name")} /></Label>
-                <Label>Valor total<Input type="number" step="0.01" {...installmentForm.register("total_value")} /></Label>
-                <Label>Parcelas<Input type="number" {...installmentForm.register("total_installments")} /></Label>
+                <Label>Valor da parcela<Input type="number" step="0.01" {...installmentForm.register("installment_value")} /></Label>
+                <Label>Total de parcelas<Input type="number" {...installmentForm.register("total_installments")} /></Label>
+                <Label>
+                  Parcela atual
+                  <Input type="number" {...installmentForm.register("current_installment")} />
+                  {installmentForm.formState.errors.current_installment && <span className="text-xs text-danger">{installmentForm.formState.errors.current_installment.message}</span>}
+                </Label>
                 <Label>Data inicial<Input type="date" {...installmentForm.register("start_date")} /></Label>
-                <Button className="w-full" disabled={mutation.isPending}><Plus size={18} />Salvar parcela</Button>
+                <Label>Observacoes<Textarea {...installmentForm.register("notes")} /></Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button className="w-full" disabled={mutation.isPending}><Plus size={18} />{editingInstallmentId ? "Atualizar" : "Salvar parcela"}</Button>
+                  {editingInstallmentId && <GhostButton type="button" onClick={() => { setEditingInstallmentId(null); installmentForm.reset({ name: "", installment_value: 0, total_installments: 2, current_installment: 1, start_date: toDateInput(), notes: "" }); }}>Cancelar</GhostButton>}
+                </div>
               </form>
             </Card>
-            <Card><InstallmentList installments={overview.installments} /></Card>
+            <Card>
+              <InstallmentList
+                installments={overview.installments}
+                onEdit={(installment) => {
+                  setEditingInstallmentId(installment.id);
+                  installmentForm.reset({
+                    name: installment.name,
+                    installment_value: Number(installment.installment_value),
+                    total_installments: installment.total_installments,
+                    current_installment: installment.current_installment,
+                    start_date: installment.start_date,
+                    notes: installment.notes ?? "",
+                  });
+                }}
+                onDelete={(installment) => {
+                  if (window.confirm("Excluir este parcelamento?")) {
+                    mutation.mutate(() => deleteInstallment(supabase, installment.id));
+                  }
+                }}
+              />
+            </Card>
           </div>
         )}
 
@@ -218,12 +324,28 @@ export function DashboardApp() {
           <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
             <Card>
               <h2 className="mb-4 text-lg font-bold">Conta fixa</h2>
-              <form className="space-y-3" onSubmit={billForm.handleSubmit((values) => mutation.mutate(() => addBill(supabase, overview.household.id, user, values)))}>
+              <form
+                className="space-y-3"
+                onSubmit={billForm.handleSubmit((values) =>
+                  mutation.mutate(async () => {
+                    if (editingBillId) {
+                      await updateBill(supabase, editingBillId, values);
+                      setEditingBillId(null);
+                    } else {
+                      await addBill(supabase, overview.household.id, user, values);
+                    }
+                    billForm.reset({ name: "", value: 0, due_date: toDateInput(), notes: "" });
+                  }),
+                )}
+              >
                 <Label>Nome<Input placeholder="Internet" {...billForm.register("name")} /></Label>
                 <Label>Valor<Input type="number" step="0.01" {...billForm.register("value")} /></Label>
                 <Label>Vencimento<Input type="date" {...billForm.register("due_date")} /></Label>
                 <Label>Observacao<Textarea {...billForm.register("notes")} /></Label>
-                <Button className="w-full" disabled={mutation.isPending}><Plus size={18} />Salvar conta</Button>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button className="w-full" disabled={mutation.isPending}><Plus size={18} />{editingBillId ? "Atualizar" : "Salvar conta"}</Button>
+                  {editingBillId && <GhostButton type="button" onClick={() => { setEditingBillId(null); billForm.reset({ name: "", value: 0, due_date: toDateInput(), notes: "" }); }}>Cancelar</GhostButton>}
+                </div>
               </form>
             </Card>
             <div className="space-y-4">
@@ -232,7 +354,24 @@ export function DashboardApp() {
                 <Stat label="Pago" value={currency.format(billTotals.paid)} tone="good" />
                 <Stat label="Pendente" value={currency.format(billTotals.pending)} tone="warn" />
               </div>
-              <Card><BillList bills={overview.bills} onToggle={(bill) => mutation.mutate(() => toggleBillPaid(supabase, bill))} /></Card>
+              <Button className="w-full" disabled={mutation.isPending || !overview.bills.length} onClick={() => mutation.mutate(() => payAllBills(supabase, overview.bills))}>
+                Todas estao pagas
+              </Button>
+              <Card>
+                <BillList
+                  bills={overview.bills}
+                  onToggle={(bill) => mutation.mutate(() => toggleBillPaid(supabase, bill))}
+                  onEdit={(bill) => {
+                    setEditingBillId(bill.id);
+                    billForm.reset({ name: bill.name, value: Number(bill.value), due_date: bill.due_date, notes: bill.notes ?? "" });
+                  }}
+                  onDelete={(bill) => {
+                    if (window.confirm("Excluir esta conta fixa?")) {
+                      mutation.mutate(() => deleteBill(supabase, bill.id));
+                    }
+                  }}
+                />
+              </Card>
             </div>
           </div>
         )}
@@ -240,8 +379,8 @@ export function DashboardApp() {
         {tab === "history" && (
           <div className="space-y-4">
             <Card>
-              <Button className="w-full" disabled={mutation.isPending} onClick={() => mutation.mutate(() => closeCycle(supabase, overview.cycle, overview.settings.monthly_limit))}>
-                Fechar Fatura
+              <Button className="w-full" disabled={mutation.isPending} onClick={() => mutation.mutate(() => payCardCycle(supabase, overview.cycle, overview.settings.monthly_limit, cardCycle.end))}>
+                Pagar Cartao
               </Button>
             </Card>
             <Card><HistoryList cycles={overview.history} /></Card>
@@ -325,7 +464,7 @@ function getLimitAlert(percent: number, remaining: number, expenses: Expense[]) 
   if (percent < 80) return null;
   const overExpense = remaining < 0 ? expenses.find((expense) => Number(expense.value) >= Math.abs(remaining)) ?? expenses[0] : null;
   if (percent >= 100) {
-    const detail = overExpense ? ` Compra: ${overExpense.categories?.name ?? "Sem categoria"}, ${currency.format(Number(overExpense.value))}, ${shortDate.format(new Date(overExpense.expense_date))}.` : "";
+    const detail = overExpense ? ` Compra: ${overExpense.categories?.name ?? "Sem categoria"}, ${currency.format(Number(overExpense.value))}, ${shortDate.format(dateOnlyFromStored(overExpense.expense_date))}.` : "";
     return { className: "mt-4 rounded-lg bg-red-50 p-3 text-sm font-semibold text-danger", text: `Limite excedido em ${currency.format(Math.abs(remaining))}.${detail}` };
   }
   if (percent >= 90) return { className: "mt-4 rounded-lg bg-orange-50 p-3 text-sm font-semibold text-orange-700", text: "90% do limite consumido." };
@@ -334,10 +473,10 @@ function getLimitAlert(percent: number, remaining: number, expenses: Expense[]) 
 
 function sortExpenses(expenses: Expense[], sort: Sort) {
   return [...expenses].sort((a, b) => {
-    if (sort === "oldest") return new Date(a.expense_date).getTime() - new Date(b.expense_date).getTime();
+    if (sort === "oldest") return dateOnlyFromStored(a.expense_date).getTime() - dateOnlyFromStored(b.expense_date).getTime();
     if (sort === "highest") return Number(b.value) - Number(a.value);
     if (sort === "lowest") return Number(a.value) - Number(b.value);
-    return new Date(b.expense_date).getTime() - new Date(a.expense_date).getTime();
+    return dateOnlyFromStored(b.expense_date).getTime() - dateOnlyFromStored(a.expense_date).getTime();
   });
 }
 
@@ -369,7 +508,205 @@ function getReports(expenses: Expense[]) {
   return Array.from(categories, ([name, item]) => ({ name, ...item, percent: total ? Math.round((item.total / total) * 100) : 0 })).sort((a, b) => b.total - a.total);
 }
 
-function ExpenseList({ expenses }: { expenses: Expense[] }) {
+type CycleRange = { start: Date; end: Date };
+type UpcomingItem = {
+  id: string;
+  type: "Conta" | "Parcela" | "Gasto";
+  title: string;
+  subtitle: string;
+  value: number;
+  dueDate: Date;
+  paid?: boolean;
+};
+
+function getMonthlyFinance(expenses: Expense[], bills: Bill[], installments: Installment[], cycle: CycleRange) {
+  const expensesTotal = expenses
+    .filter((expense) => isWithinInterval(dateOnlyFromStored(expense.expense_date), cycle))
+    .reduce((sum, expense) => sum + Number(expense.value), 0);
+
+  const billsTotal = getBillOccurrences(bills, cycle).reduce((sum, bill) => sum + bill.value, 0);
+
+  const installmentsTotal = installments
+    .filter((item) => item.active && item.current_installment <= item.total_installments)
+    .filter((item) => isWithinInterval(getInstallmentDueDate(item, item.current_installment), cycle))
+    .reduce((sum, item) => sum + Number(item.installment_value), 0);
+
+  return {
+    expensesTotal,
+    billsTotal,
+    installmentsTotal,
+    cardTotal: expensesTotal + installmentsTotal,
+  };
+}
+
+function getCardCommitment(installments: Installment[]) {
+  return installments
+    .filter((item) => item.active)
+    .reduce((sum, item) => {
+      const remaining = Math.max(item.total_installments - item.current_installment + 1, 0);
+      return sum + Number(item.installment_value) * remaining;
+    }, 0);
+}
+
+function getInstallmentDueDate(item: Installment, installmentNumber: number) {
+  return addMonths(parseISO(item.start_date), installmentNumber - 1);
+}
+
+function getCardCycleRange(paymentDay: number): CycleRange {
+  const today = startOfDay(new Date());
+  const currentMonthPayment = makePaymentDate(today.getFullYear(), today.getMonth(), paymentDay);
+  const start = today >= currentMonthPayment ? currentMonthPayment : makePaymentDate(today.getFullYear(), today.getMonth() - 1, paymentDay);
+  return { start, end: makePaymentDate(start.getFullYear(), start.getMonth() + 1, paymentDay) };
+}
+
+function makePaymentDate(year: number, month: number, paymentDay: number) {
+  const firstDay = new Date(year, month, 1);
+  const lastDay = endOfMonth(firstDay).getDate();
+  return startOfDay(new Date(year, month, Math.min(paymentDay, lastDay)));
+}
+
+function startOfDay(date: Date) {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function getCardUpcomingItems(expenses: Expense[], installments: Installment[], cycle: CycleRange) {
+  const items: UpcomingItem[] = [];
+
+  installments
+    .filter((item) => item.active)
+    .forEach((item) => {
+      const dueDate = getInstallmentDueDate(item, item.current_installment);
+      if (item.current_installment <= item.total_installments && isWithinInterval(dueDate, cycle)) {
+        items.push({
+          id: `installment-${item.id}-${item.current_installment}`,
+          type: "Parcela",
+          title: item.name,
+          subtitle: `Parcela ${item.current_installment}/${item.total_installments} - fatura atual`,
+          value: Number(item.installment_value),
+          dueDate: cycle.end,
+        });
+      }
+    });
+
+  expenses
+    .filter((expense) => isWithinInterval(dateOnlyFromStored(expense.expense_date), cycle))
+    .sort((a, b) => dateOnlyFromStored(a.expense_date).getTime() - dateOnlyFromStored(b.expense_date).getTime())
+    .forEach((expense) => {
+      items.push({
+        id: `expense-${expense.id}`,
+        type: "Gasto",
+        title: expense.categories?.name ?? "Gasto futuro",
+        subtitle: `${expense.description || "Gasto do cartao"} - compra em ${shortDate.format(dateOnlyFromStored(expense.expense_date))}`,
+        value: Number(expense.value),
+        dueDate: cycle.end,
+      });
+    });
+
+  return items.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
+}
+
+function getFutureItems(expenses: Expense[], bills: Bill[], installments: Installment[], cycle: CycleRange) {
+  const items: UpcomingItem[] = [];
+
+  bills
+    .filter((bill) => parseISO(bill.due_date) > cycle.end)
+    .forEach((bill) => {
+      items.push({
+        id: `future-bill-${bill.id}`,
+        type: "Conta",
+        title: bill.name,
+        subtitle: bill.notes || "Conta futura",
+        value: Number(bill.value),
+        dueDate: parseISO(bill.due_date),
+      });
+    });
+
+  installments
+    .filter((item) => item.active)
+    .forEach((item) => {
+      for (let installmentNumber = item.current_installment + 1; installmentNumber <= item.total_installments; installmentNumber += 1) {
+        const dueDate = getInstallmentDueDate(item, installmentNumber);
+        if (dueDate > cycle.end) {
+          items.push({
+            id: `future-installment-${item.id}-${installmentNumber}`,
+            type: "Parcela",
+            title: item.name,
+            subtitle: `Parcela ${installmentNumber}/${item.total_installments}`,
+            value: Number(item.installment_value),
+            dueDate,
+          });
+        }
+      }
+    });
+
+  expenses
+    .filter((expense) => dateOnlyFromStored(expense.expense_date) > cycle.end)
+    .forEach((expense) => {
+      items.push({
+        id: `future-expense-${expense.id}`,
+        type: "Gasto",
+        title: expense.categories?.name ?? "Gasto futuro",
+        subtitle: expense.description ?? "Lancamento futuro",
+        value: Number(expense.value),
+        dueDate: dateOnlyFromStored(expense.expense_date),
+      });
+    });
+
+  return items.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
+}
+
+function getBillOccurrences(bills: Bill[], cycle: CycleRange) {
+  return bills.flatMap((bill) => {
+    if (bill.paid) return [];
+
+    const occurrences: Array<Bill & { dueDate: Date; overdue: boolean; value: number }> = [];
+    let dueDate = startOfDay(parseISO(bill.due_date));
+    const dueDay = bill.due_day ?? dueDate.getDate();
+    let guard = 0;
+
+    while (dueDate <= cycle.end && guard < 36) {
+      if (dueDate < cycle.start || isWithinInterval(dueDate, cycle)) {
+        occurrences.push({
+          ...bill,
+          dueDate,
+          overdue: dueDate < cycle.start,
+          value: Number(bill.value),
+        });
+      }
+
+      dueDate = makePaymentDate(dueDate.getFullYear(), dueDate.getMonth() + 1, dueDay);
+      guard += 1;
+    }
+
+    return occurrences;
+  });
+}
+
+function UpcomingList({ items, emptyText = "Nenhum vencimento encontrado." }: { items: UpcomingItem[]; emptyText?: string }) {
+  if (!items.length) return <p className="text-sm text-zinc-500">{emptyText}</p>;
+
+  return (
+    <div className="divide-y divide-line">
+      {items.map((item) => {
+        const late = isBefore(item.dueDate, startOfDay(new Date()));
+        return (
+          <div key={item.id} className="flex items-start justify-between gap-3 py-3">
+            <div>
+              <p className="font-semibold">{item.title}</p>
+              <p className="text-sm text-zinc-500">{item.type} - {item.subtitle}</p>
+              <p className={late ? "text-xs font-semibold text-danger" : "text-xs text-zinc-500"}>{shortDate.format(item.dueDate)}{late ? " - atrasado" : ""}</p>
+            </div>
+            <p className="whitespace-nowrap font-bold">{currency.format(item.value)}</p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ExpenseList({ expenses, onEdit, onDelete }: { expenses: Expense[]; onEdit: (expense: Expense) => void; onDelete: (expense: Expense) => void }) {
   if (!expenses.length) return <p className="text-sm text-zinc-500">Nenhum gasto encontrado.</p>;
   return (
     <div className="divide-y divide-line">
@@ -378,10 +715,16 @@ function ExpenseList({ expenses }: { expenses: Expense[] }) {
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="font-semibold">{expense.categories?.name ?? "Sem categoria"}</p>
-              <p className="text-sm text-zinc-500">{expense.description}</p>
-              <p className="mt-1 text-xs text-zinc-500">{shortDate.format(new Date(expense.expense_date))} as {shortTime.format(new Date(expense.expense_date))} - {expense.profiles?.name ?? expense.profiles?.email ?? "Usuario"}</p>
+              {expense.description && <p className="text-sm text-zinc-500">{expense.description}</p>}
+              <p className="mt-1 text-xs text-zinc-500">{shortDate.format(dateOnlyFromStored(expense.expense_date))} as {shortTime.format(new Date(expense.created_at))} - {expense.profiles?.name ?? expense.profiles?.email ?? "Usuario"}</p>
             </div>
-            <p className="whitespace-nowrap font-bold">{currency.format(Number(expense.value))}</p>
+            <div className="text-right">
+              <p className="whitespace-nowrap font-bold">{currency.format(Number(expense.value))}</p>
+              <div className="mt-1 flex justify-end gap-1">
+                <button className="tap rounded-lg p-2 text-zinc-600" onClick={() => onEdit(expense)} aria-label="Editar gasto"><Pencil size={16} /></button>
+                <button className="tap rounded-lg p-2 text-danger" onClick={() => onDelete(expense)} aria-label="Excluir gasto"><Trash2 size={16} /></button>
+              </div>
+            </div>
           </div>
         </div>
       ))}
@@ -389,7 +732,7 @@ function ExpenseList({ expenses }: { expenses: Expense[] }) {
   );
 }
 
-function InstallmentList({ installments }: { installments: Installment[] }) {
+function InstallmentList({ installments, onEdit, onDelete }: { installments: Installment[]; onEdit: (installment: Installment) => void; onDelete: (installment: Installment) => void }) {
   if (!installments.length) return <p className="text-sm text-zinc-500">Nenhuma compra parcelada cadastrada.</p>;
   return (
     <div className="divide-y divide-line">
@@ -402,9 +745,16 @@ function InstallmentList({ installments }: { installments: Installment[] }) {
               <div>
                 <p className="font-semibold">{item.name}</p>
                 <p className="text-sm text-zinc-500">Parcela {Math.min(item.current_installment, item.total_installments)}/{item.total_installments} - restam {remaining}</p>
-                <p className="text-xs text-zinc-500">Termina em {format(endDate, "MMMM/yyyy", { locale: ptBR })}</p>
+                <p className="text-xs text-zinc-500">Valor total: {currency.format(Number(item.total_value))} - termina em {format(endDate, "MMMM/yyyy", { locale: ptBR })}</p>
+                {item.notes && <p className="text-xs text-zinc-500">{item.notes}</p>}
               </div>
-              <p className="font-bold">{currency.format(Number(item.installment_value))}</p>
+              <div className="text-right">
+                <p className="font-bold">{currency.format(Number(item.installment_value))}</p>
+                <div className="mt-1 flex justify-end gap-1">
+                  <button className="tap rounded-lg p-2 text-zinc-600" onClick={() => onEdit(item)} aria-label="Editar parcela"><Pencil size={16} /></button>
+                  <button className="tap rounded-lg p-2 text-danger" onClick={() => onDelete(item)} aria-label="Excluir parcela"><Trash2 size={16} /></button>
+                </div>
+              </div>
             </div>
           </div>
         );
@@ -413,7 +763,7 @@ function InstallmentList({ installments }: { installments: Installment[] }) {
   );
 }
 
-function BillList({ bills, onToggle }: { bills: Bill[]; onToggle: (bill: Bill) => void }) {
+function BillList({ bills, onToggle, onEdit, onDelete }: { bills: Bill[]; onToggle: (bill: Bill) => void; onEdit?: (bill: Bill) => void; onDelete?: (bill: Bill) => void }) {
   if (!bills.length) return <p className="text-sm text-zinc-500">Nenhuma conta fixa cadastrada.</p>;
   return (
     <div className="divide-y divide-line">
@@ -428,7 +778,11 @@ function BillList({ bills, onToggle }: { bills: Bill[]; onToggle: (bill: Bill) =
             </div>
             <div className="text-right">
               <p className="font-bold">{currency.format(Number(bill.value))}</p>
-              <GhostButton className="mt-1 !min-h-9 px-3 py-1 text-xs" onClick={() => onToggle(bill)}>{bill.paid ? "Desmarcar" : "Pagar"}</GhostButton>
+              <div className="mt-1 flex justify-end gap-1">
+                <GhostButton className="!min-h-9 px-3 py-1 text-xs" onClick={() => onToggle(bill)}>{bill.paid ? "Desmarcar" : "Pagar"}</GhostButton>
+                {onEdit && <button className="tap rounded-lg p-2 text-zinc-600" onClick={() => onEdit(bill)} aria-label="Editar conta"><Pencil size={16} /></button>}
+                {onDelete && <button className="tap rounded-lg p-2 text-danger" onClick={() => onDelete(bill)} aria-label="Excluir conta"><Trash2 size={16} /></button>}
+              </div>
             </div>
           </div>
         );

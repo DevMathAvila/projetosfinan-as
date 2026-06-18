@@ -115,6 +115,8 @@ Em `Ciclo do cartao`, voce define:
 - dia de pagamento;
 - limite mensal.
 
+Se o cartao vence/paga todo dia 10, coloque `10`. Assim a fatura atual considera sempre o periodo de dia 10 ate dia 10 do mes seguinte.
+
 Esses valores alimentam a tela `Inicio`. Se voce muda o limite aqui, o resumo principal passa a usar o novo valor.
 
 Em `Convidar pessoa`, voce libera outra pessoa para usar a mesma familia no app.
