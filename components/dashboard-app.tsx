@@ -115,6 +115,7 @@ export function DashboardApp() {
   );
   const users = uniqueUsers(overview.expenses);
   const billTotals = getBillTotals(overview.bills);
+  const total = monthlyFinance.installmentsTotal + monthlyFinance.expensesTotal + billTotals.total;
   const reports = getReports(overview.expenses);
 
   async function signOut() {
@@ -170,7 +171,7 @@ export function DashboardApp() {
               <Stat label="Cartao comprometido" value={currency.format(cardCommitment)} tone={cardCommitment > 0 ? "warn" : "good"} />
             </div>
 
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 md:grid-cols-4">
               <button className="text-left" onClick={() => setTab("installments")}>
                 <Stat label="Parcelas Cartao" value={currency.format(monthlyFinance.installmentsTotal)} />
               </button>
@@ -180,6 +181,7 @@ export function DashboardApp() {
               <button className="text-left" onClick={() => setTab("bills")}>
                 <Stat label="Contas" value={currency.format(billTotals.total)} />
               </button>
+              <Stat label="TOTAL" value={currency.format(total)} tone="good" />
             </div>
 
             <Card>
