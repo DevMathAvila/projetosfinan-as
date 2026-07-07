@@ -2,7 +2,7 @@ import { clsx } from "clsx";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
 
 export function Card({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <section className={clsx("rounded-lg border border-line bg-paper p-4 shadow-soft", className)}>{children}</section>;
+  return <section className={clsx("rounded-lg border border-line bg-paper p-3 shadow-soft sm:p-4", className)}>{children}</section>;
 }
 
 export function Button({ className, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
@@ -54,9 +54,9 @@ export function Stat({ label, value, tone = "default" }: { label: string; value:
   }[tone];
 
   return (
-    <div className="rounded-lg border border-line bg-white p-3">
+    <div className="min-w-0 rounded-lg border border-line bg-white p-3">
       <p className="text-xs text-zinc-500">{label}</p>
-      <p className={clsx("mt-1 text-xl font-bold", toneClass)}>{value}</p>
+      <p className={clsx("mt-1 break-words text-lg font-bold leading-tight sm:text-xl", toneClass)}>{value}</p>
     </div>
   );
 }

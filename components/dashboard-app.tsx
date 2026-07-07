@@ -127,19 +127,19 @@ export function DashboardApp() {
 
   return (
     <main className="min-h-screen bg-mist pb-24">
-      <header className="sticky top-0 z-10 border-b border-line bg-white/95 px-4 py-3 backdrop-blur">
-        <div className="mx-auto flex max-w-5xl items-center justify-between">
-          <div>
+      <header className="sticky top-0 z-10 border-b border-line bg-white/95 px-3 py-3 backdrop-blur sm:px-4">
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
+          <div className="min-w-0">
             <p className="text-xs font-semibold text-good">{overview.household.name}</p>
-            <h1 className="text-xl font-bold text-ink">Finance Family</h1>
+            <h1 className="truncate text-lg font-bold text-ink sm:text-xl">Finance Family</h1>
           </div>
-          <button className="tap rounded-lg border border-line p-2" onClick={signOut} aria-label="Sair">
+          <button className="tap shrink-0 rounded-lg border border-line p-2" onClick={signOut} aria-label="Sair">
             <LogOut size={20} />
           </button>
         </div>
       </header>
 
-      <div className="mx-auto max-w-5xl space-y-4 p-4">
+      <div className="mx-auto max-w-5xl space-y-3 p-3 sm:space-y-4 sm:p-4">
         {mutation.isError && (
           <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-danger">
             {mutation.error instanceof Error ? mutation.error.message : "Nao foi possivel salvar a alteracao."}
@@ -149,13 +149,13 @@ export function DashboardApp() {
         {tab === "home" && (
           <>
             <Card>
-              <div className="flex items-start justify-between gap-3">
-                <div>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
                   <p className="text-sm text-zinc-500">Ciclo atual: {shortDate.format(cardCycle.start)} ate {shortDate.format(cardCycle.end)}</p>
                   <h2 className="text-2xl font-bold">{percent}% utilizado</h2>
                   {cardOverdue && <p className="mt-1 text-sm font-semibold text-danger">Cartao em atraso. Pague para abrir o proximo ciclo.</p>}
                 </div>
-                <Button onClick={() => mutation.mutate(() => payCardCycle(supabase, overview.cycle, overview.settings.monthly_limit, cardCycle.end))}>
+                <Button className="w-full sm:w-auto" onClick={() => mutation.mutate(() => payCardCycle(supabase, overview.cycle, overview.settings.monthly_limit, cardCycle.end))}>
                   <CreditCard size={18} />
                   Pagar cartao
                 </Button>
@@ -173,7 +173,7 @@ export function DashboardApp() {
               <Stat label="Cartao comprometido" value={currency.format(cardCommitment)} tone={cardCommitment > 0 ? "warn" : "good"} />
             </div>
 
-            <div className="grid gap-3 md:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <button className="text-left" onClick={() => setTab("installments")}>
                 <Stat label="Parcelas Cartao" value={currency.format(monthlyFinance.installmentsTotal)} />
               </button>
@@ -353,14 +353,14 @@ export function DashboardApp() {
                   </Select>
                 </Label>
                 <Label>Observacao<Textarea {...billForm.register("notes")} /></Label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid gap-2 sm:grid-cols-2">
                   <Button className="w-full" disabled={mutation.isPending}><Plus size={18} />{editingBillId ? "Atualizar" : "Salvar conta"}</Button>
                   {editingBillId && <GhostButton type="button" onClick={() => { setEditingBillId(null); billForm.reset({ name: "", value: 0, due_date: toDateInput(), bill_type: "fixed", notes: "" }); }}>Cancelar</GhostButton>}
                 </div>
               </form>
             </Card>
             <div className="space-y-4">
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-3">
                 <Stat label="Total" value={currency.format(billTotals.total)} />
                 <Stat label="Pago" value={currency.format(billTotals.paid)} tone="good" />
                 <Stat label="Pendente" value={currency.format(billTotals.pending)} tone="warn" />
@@ -718,12 +718,12 @@ function UpcomingList({ items, emptyText = "Nenhum vencimento encontrado." }: { 
         const late = isBefore(item.dueDate, startOfDay(new Date()));
         return (
           <div key={item.id} className="flex items-start justify-between gap-3 py-3">
-            <div>
+            <div className="min-w-0">
               <p className="font-semibold">{item.title}</p>
               <p className="text-sm text-zinc-500">{item.type} - {item.subtitle}</p>
               <p className={late ? "text-xs font-semibold text-danger" : "text-xs text-zinc-500"}>{shortDate.format(item.dueDate)}{late ? " - atrasado" : ""}</p>
             </div>
-            <p className="whitespace-nowrap font-bold">{currency.format(item.value)}</p>
+            <p className="shrink-0 whitespace-nowrap font-bold">{currency.format(item.value)}</p>
           </div>
         );
       })}
@@ -738,12 +738,12 @@ function ExpenseList({ expenses, onEdit, onDelete }: { expenses: Expense[]; onEd
       {expenses.map((expense) => (
         <div key={expense.id} className="py-3">
           <div className="flex items-start justify-between gap-3">
-            <div>
+            <div className="min-w-0">
               <p className="font-semibold">{expense.categories?.name ?? "Sem categoria"}</p>
               {expense.description && <p className="text-sm text-zinc-500">{expense.description}</p>}
               <p className="mt-1 text-xs text-zinc-500">{shortDate.format(dateOnlyFromStored(expense.expense_date))} as {shortTime.format(new Date(expense.created_at))} - {expense.profiles?.name ?? expense.profiles?.email ?? "Usuario"}</p>
             </div>
-            <div className="text-right">
+            <div className="shrink-0 text-right">
               <p className="whitespace-nowrap font-bold">{currency.format(Number(expense.value))}</p>
               <div className="mt-1 flex justify-end gap-1">
                 <button className="tap rounded-lg p-2 text-zinc-600" onClick={() => onEdit(expense)} aria-label="Editar gasto"><Pencil size={16} /></button>
@@ -767,13 +767,13 @@ function InstallmentList({ installments, onEdit, onDelete }: { installments: Ins
         return (
           <div key={item.id} className="py-3">
             <div className="flex justify-between gap-3">
-              <div>
+              <div className="min-w-0">
                 <p className="font-semibold">{item.name}</p>
                 <p className="text-sm text-zinc-500">Parcela {Math.min(item.current_installment, item.total_installments)}/{item.total_installments} - restam {remaining}</p>
                 <p className="text-xs text-zinc-500">Valor total: {currency.format(Number(item.total_value))} - termina em {format(endDate, "MMMM/yyyy", { locale: ptBR })}</p>
                 {item.notes && <p className="text-xs text-zinc-500">{item.notes}</p>}
               </div>
-              <div className="text-right">
+              <div className="shrink-0 text-right">
                 <p className="font-bold">{currency.format(Number(item.installment_value))}</p>
                 <div className="mt-1 flex justify-end gap-1">
                   <button className="tap rounded-lg p-2 text-zinc-600" onClick={() => onEdit(item)} aria-label="Editar parcela"><Pencil size={16} /></button>
@@ -796,17 +796,17 @@ function BillList({ bills, onToggle, onEdit, onDelete }: { bills: Bill[]; onTogg
         const late = !bill.paid && isBefore(parseISO(bill.due_date), new Date());
         const variableWithoutValue = bill.bill_type === "variable" && Number(bill.value) === 0;
         return (
-          <div key={bill.id} className={`flex items-center justify-between gap-3 py-3 ${variableWithoutValue ? "rounded-lg bg-yellow-50 px-3" : ""}`}>
-            <div>
+          <div key={bill.id} className={`flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between ${variableWithoutValue ? "rounded-lg bg-yellow-50 px-3" : ""}`}>
+            <div className="min-w-0">
               <p className="font-semibold">{bill.name}</p>
               <p className={`text-sm ${late ? "text-danger" : "text-zinc-500"}`}>{shortDate.format(parseISO(bill.due_date))} - {bill.paid ? "Pago" : late ? "Atrasada" : "Pendente"}</p>
               <p className="text-xs text-zinc-500">{bill.bill_type === "variable" ? "Variavel recorrente" : "Fixa"}</p>
               {variableWithoutValue && <p className="text-xs font-semibold text-warn">Aguardando valor da proxima conta</p>}
               {bill.notes && <p className="text-xs text-zinc-500">{bill.notes}</p>}
             </div>
-            <div className="text-right">
+            <div className="flex items-center justify-between gap-3 sm:block sm:text-right">
               <p className={`font-bold ${variableWithoutValue ? "text-warn" : ""}`}>{currency.format(Number(bill.value))}</p>
-              <div className="mt-1 flex justify-end gap-1">
+              <div className="flex justify-end gap-1 sm:mt-1">
                 <GhostButton className="!min-h-9 px-3 py-1 text-xs" onClick={() => onToggle(bill)}>{bill.paid ? "Desmarcar" : "Pagar"}</GhostButton>
                 {onEdit && <button className="tap rounded-lg p-2 text-zinc-600" onClick={() => onEdit(bill)} aria-label="Editar conta"><Pencil size={16} /></button>}
                 {onDelete && <button className="tap rounded-lg p-2 text-danger" onClick={() => onDelete(bill)} aria-label="Excluir conta"><Trash2 size={16} /></button>}
