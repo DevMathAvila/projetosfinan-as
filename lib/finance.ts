@@ -18,6 +18,7 @@ export type Cycle = Tables["billing_cycles"]["Row"];
 export type Expense = Tables["expenses"]["Row"] & { categories?: Pick<Category, "name"> | null; profiles?: Pick<Profile, "name" | "email"> | null };
 export type Installment = Tables["installments"]["Row"];
 export type Bill = Tables["bills"]["Row"];
+export type BillPayment = Tables["bill_payments"]["Row"];
 export type AccessInvite = Tables["access_invites"]["Row"];
 
 export async function getSessionUser(supabase: Client) {
@@ -39,18 +40,19 @@ export async function getHousehold(supabase: Client) {
 
 export async function getOverview(supabase: Client) {
   const household = await getHousehold(supabase);
-  const [settingsResult, cycleResult, categoriesResult, expensesResult, installmentsResult, billsResult, historyResult, invitesResult] = await Promise.all([
+  const [settingsResult, cycleResult, categoriesResult, expensesResult, installmentsResult, billsResult, paymentsResult, historyResult, invitesResult] = await Promise.all([
     supabase.from("settings").select("*").eq("household_id", household.id).single(),
     supabase.from("billing_cycles").select("*").eq("household_id", household.id).eq("closed", false).single(),
     supabase.from("categories").select("*").eq("household_id", household.id).order("name"),
     supabase.from("expenses").select("*, categories(name), profiles(name,email)").eq("household_id", household.id).order("expense_date", { ascending: false }),
     supabase.from("installments").select("*").eq("household_id", household.id).order("start_date", { ascending: false }),
     supabase.from("bills").select("*").eq("household_id", household.id).order("due_date", { ascending: true }),
+    supabase.from("bill_payments").select("*").eq("household_id", household.id).order("payment_date", { ascending: false }),
     supabase.from("billing_cycles").select("*").eq("household_id", household.id).eq("closed", true).order("end_date", { ascending: false }),
     supabase.from("access_invites").select("*").eq("household_id", household.id).order("created_at", { ascending: false }),
   ]);
 
-  for (const result of [settingsResult, cycleResult, categoriesResult, expensesResult, installmentsResult, billsResult, historyResult, invitesResult]) {
+  for (const result of [settingsResult, cycleResult, categoriesResult, expensesResult, installmentsResult, billsResult, paymentsResult, historyResult, invitesResult]) {
     if (result.error) throw result.error;
   }
 
@@ -64,6 +66,7 @@ export async function getOverview(supabase: Client) {
     expenses: expensesResult.data as unknown as Expense[],
     installments: installmentsResult.data as unknown as Installment[],
     bills,
+    billPayments: paymentsResult.data as unknown as BillPayment[],
     history: historyResult.data as unknown as Cycle[],
     invites: invitesResult.data as unknown as AccessInvite[],
   };

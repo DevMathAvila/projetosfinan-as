@@ -30,6 +30,7 @@ import {
   updateInstallment,
   type AccessInvite,
   type Bill,
+  type BillPayment,
   type Client,
   type Expense,
   type Installment,
@@ -114,7 +115,7 @@ export function DashboardApp() {
     sort,
   );
   const users = uniqueUsers(overview.expenses);
-  const billTotals = getBillTotals(overview.bills);
+  const billTotals = getBillTotals(overview.bills, overview.billPayments);
   const pendingBills = getVisiblePendingBills(overview.bills);
   const pendingBillsTotal = pendingBills.reduce((sum, bill) => sum + Number(bill.value), 0);
   const total = monthlyFinance.installmentsTotal + monthlyFinance.expensesTotal + pendingBillsTotal;
@@ -126,12 +127,12 @@ export function DashboardApp() {
   }
 
   return (
-    <main className="min-h-screen bg-mist pb-24">
-      <header className="sticky top-0 z-10 border-b border-line bg-white/95 px-3 py-3 backdrop-blur sm:px-4">
+    <main className="min-h-screen overflow-x-hidden bg-mist pb-24">
+      <header className="sticky top-0 z-10 border-b border-line bg-white/95 px-3 py-3 backdrop-blur md:px-4">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-xs font-semibold text-good">{overview.household.name}</p>
-            <h1 className="truncate text-lg font-bold text-ink sm:text-xl">Finance Family</h1>
+            <h1 className="truncate text-lg font-bold text-ink md:text-xl">Finance Family</h1>
           </div>
           <button className="tap shrink-0 rounded-lg border border-line p-2" onClick={signOut} aria-label="Sair">
             <LogOut size={20} />
@@ -139,7 +140,7 @@ export function DashboardApp() {
         </div>
       </header>
 
-      <div className="mx-auto max-w-5xl space-y-3 p-3 sm:space-y-4 sm:p-4">
+      <div className="mx-auto max-w-5xl space-y-3 p-3 md:space-y-4 md:p-4">
         {mutation.isError && (
           <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-danger">
             {mutation.error instanceof Error ? mutation.error.message : "Nao foi possivel salvar a alteracao."}
@@ -149,13 +150,13 @@ export function DashboardApp() {
         {tab === "home" && (
           <>
             <Card>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div className="min-w-0">
                   <p className="text-sm text-zinc-500">Ciclo atual: {shortDate.format(cardCycle.start)} ate {shortDate.format(cardCycle.end)}</p>
                   <h2 className="text-2xl font-bold">{percent}% utilizado</h2>
                   {cardOverdue && <p className="mt-1 text-sm font-semibold text-danger">Cartao em atraso. Pague para abrir o proximo ciclo.</p>}
                 </div>
-                <Button className="w-full sm:w-auto" onClick={() => mutation.mutate(() => payCardCycle(supabase, overview.cycle, overview.settings.monthly_limit, cardCycle.end))}>
+                <Button className="w-full md:w-auto" onClick={() => mutation.mutate(() => payCardCycle(supabase, overview.cycle, overview.settings.monthly_limit, cardCycle.end))}>
                   <CreditCard size={18} />
                   Pagar cartao
                 </Button>
@@ -353,14 +354,14 @@ export function DashboardApp() {
                   </Select>
                 </Label>
                 <Label>Observacao<Textarea {...billForm.register("notes")} /></Label>
-                <div className="grid gap-2 sm:grid-cols-2">
+                <div className="grid gap-2 md:grid-cols-2">
                   <Button className="w-full" disabled={mutation.isPending}><Plus size={18} />{editingBillId ? "Atualizar" : "Salvar conta"}</Button>
                   {editingBillId && <GhostButton type="button" onClick={() => { setEditingBillId(null); billForm.reset({ name: "", value: 0, due_date: toDateInput(), bill_type: "fixed", notes: "" }); }}>Cancelar</GhostButton>}
                 </div>
               </form>
             </Card>
             <div className="space-y-4">
-              <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                 <Stat label="Total" value={currency.format(billTotals.total)} />
                 <Stat label="Pago" value={currency.format(billTotals.paid)} tone="good" />
                 <Stat label="Pendente" value={currency.format(billTotals.pending)} tone="warn" />
@@ -497,15 +498,33 @@ function uniqueUsers(expenses: Expense[]) {
   return Array.from(map, ([id, name]) => ({ id, name }));
 }
 
-function getBillTotals(bills: Bill[]) {
+function getBillTotals(bills: Bill[], payments: BillPayment[] = []) {
+  const latestPaymentsByBill = getLatestPaymentsByBill(payments);
+
   return bills.reduce(
     (totals, bill) => {
-      totals.total += Number(bill.value);
-      totals[bill.paid ? "paid" : "pending"] += Number(bill.value);
+      const value = getBillTotalValue(bill, latestPaymentsByBill);
+      totals.total += value;
+      totals[bill.paid ? "paid" : "pending"] += value;
       return totals;
     },
     { total: 0, paid: 0, pending: 0 },
   );
+}
+
+function getLatestPaymentsByBill(payments: BillPayment[]) {
+  return payments.reduce((map, payment) => {
+    const current = map.get(payment.bill_id);
+    if (!current || new Date(payment.payment_date) > new Date(current.payment_date)) {
+      map.set(payment.bill_id, payment);
+    }
+    return map;
+  }, new Map<string, BillPayment>());
+}
+
+function getBillTotalValue(bill: Bill, latestPaymentsByBill: Map<string, BillPayment>) {
+  if (!bill.paid) return Number(bill.value);
+  return Number(latestPaymentsByBill.get(bill.id)?.value ?? bill.value);
 }
 
 function getVisiblePendingBills(bills: Bill[]) {
@@ -796,7 +815,7 @@ function BillList({ bills, onToggle, onEdit, onDelete }: { bills: Bill[]; onTogg
         const late = !bill.paid && isBefore(parseISO(bill.due_date), new Date());
         const variableWithoutValue = bill.bill_type === "variable" && Number(bill.value) === 0;
         return (
-          <div key={bill.id} className={`flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between ${variableWithoutValue ? "rounded-lg bg-yellow-50 px-3" : ""}`}>
+          <div key={bill.id} className={`flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between ${variableWithoutValue ? "rounded-lg bg-yellow-50 px-3" : ""}`}>
             <div className="min-w-0">
               <p className="font-semibold">{bill.name}</p>
               <p className={`text-sm ${late ? "text-danger" : "text-zinc-500"}`}>{shortDate.format(parseISO(bill.due_date))} - {bill.paid ? "Pago" : late ? "Atrasada" : "Pendente"}</p>
@@ -804,9 +823,9 @@ function BillList({ bills, onToggle, onEdit, onDelete }: { bills: Bill[]; onTogg
               {variableWithoutValue && <p className="text-xs font-semibold text-warn">Aguardando valor da proxima conta</p>}
               {bill.notes && <p className="text-xs text-zinc-500">{bill.notes}</p>}
             </div>
-            <div className="flex items-center justify-between gap-3 sm:block sm:text-right">
+            <div className="flex items-center justify-between gap-3 md:block md:text-right">
               <p className={`font-bold ${variableWithoutValue ? "text-warn" : ""}`}>{currency.format(Number(bill.value))}</p>
-              <div className="flex justify-end gap-1 sm:mt-1">
+              <div className="flex justify-end gap-1 md:mt-1">
                 <GhostButton className="!min-h-9 px-3 py-1 text-xs" onClick={() => onToggle(bill)}>{bill.paid ? "Desmarcar" : "Pagar"}</GhostButton>
                 {onEdit && <button className="tap rounded-lg p-2 text-zinc-600" onClick={() => onEdit(bill)} aria-label="Editar conta"><Pencil size={16} /></button>}
                 {onDelete && <button className="tap rounded-lg p-2 text-danger" onClick={() => onDelete(bill)} aria-label="Excluir conta"><Trash2 size={16} /></button>}

@@ -2,7 +2,7 @@ import { clsx } from "clsx";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
 
 export function Card({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <section className={clsx("rounded-lg border border-line bg-paper p-3 shadow-soft sm:p-4", className)}>{children}</section>;
+  return <section className={clsx("rounded-lg border border-line bg-paper p-3 shadow-soft md:p-4", className)}>{children}</section>;
 }
 
 export function Button({ className, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
@@ -30,15 +30,15 @@ export function GhostButton({ className, ...props }: ButtonHTMLAttributes<HTMLBu
 }
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className="tap w-full rounded-lg border border-line bg-white px-3 py-2 text-base outline-none focus:border-ink" {...props} />;
+  return <input className="tap w-full min-w-0 rounded-lg border border-line bg-white px-3 py-2 text-base outline-none focus:border-ink" {...props} />;
 }
 
 export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select className="tap w-full rounded-lg border border-line bg-white px-3 py-2 text-base outline-none focus:border-ink" {...props} />;
+  return <select className="tap w-full min-w-0 rounded-lg border border-line bg-white px-3 py-2 text-base outline-none focus:border-ink" {...props} />;
 }
 
 export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea className="min-h-20 w-full rounded-lg border border-line bg-white px-3 py-2 text-base outline-none focus:border-ink" {...props} />;
+  return <textarea className="min-h-20 w-full min-w-0 rounded-lg border border-line bg-white px-3 py-2 text-base outline-none focus:border-ink" {...props} />;
 }
 
 export function Label({ children }: { children: React.ReactNode }) {
@@ -56,7 +56,7 @@ export function Stat({ label, value, tone = "default" }: { label: string; value:
   return (
     <div className="min-w-0 rounded-lg border border-line bg-white p-3">
       <p className="text-xs text-zinc-500">{label}</p>
-      <p className={clsx("mt-1 break-words text-lg font-bold leading-tight sm:text-xl", toneClass)}>{value}</p>
+      <p className={clsx("mt-1 break-words text-lg font-bold leading-tight md:text-xl", toneClass)}>{value}</p>
     </div>
   );
 }
