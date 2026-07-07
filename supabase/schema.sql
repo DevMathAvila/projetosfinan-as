@@ -104,10 +104,11 @@ create table if not exists public.bills (
   id uuid primary key default gen_random_uuid(),
   household_id uuid not null references public.households(id) on delete cascade,
   name text not null,
-  value numeric(12,2) not null check (value > 0),
+  value numeric(12,2) not null check (value >= 0),
   due_date date not null,
   due_day integer not null default 1 check (due_day between 1 and 31),
   paid boolean not null default false,
+  bill_type text not null default 'fixed' check (bill_type in ('fixed', 'variable')),
   notes text,
   created_by uuid not null references public.profiles(id),
   created_at timestamptz not null default now()

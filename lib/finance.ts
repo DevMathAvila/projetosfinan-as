@@ -54,6 +54,8 @@ export async function getOverview(supabase: Client) {
     if (result.error) throw result.error;
   }
 
+  const bills = await rollOverPaidBills(supabase, (billsResult.data ?? []) as Bill[]);
+
   return {
     household,
     settings: settingsResult.data as unknown as Settings,
@@ -61,7 +63,7 @@ export async function getOverview(supabase: Client) {
     categories: categoriesResult.data as unknown as Category[],
     expenses: expensesResult.data as unknown as Expense[],
     installments: installmentsResult.data as unknown as Installment[],
-    bills: billsResult.data as unknown as Bill[],
+    bills,
     history: historyResult.data as unknown as Cycle[],
     invites: invitesResult.data as unknown as AccessInvite[],
   };
@@ -168,6 +170,7 @@ export async function addBill(supabase: Client, householdId: string, user: User,
     value: bill.value,
     due_date: bill.due_date,
     due_day: dueDate.getDate(),
+    bill_type: bill.bill_type,
     notes: bill.notes?.trim() || null,
   });
   if (error) throw error;
@@ -182,6 +185,7 @@ export async function updateBill(supabase: Client, billId: string, bill: BillFor
       value: bill.value,
       due_date: bill.due_date,
       due_day: dueDate.getDate(),
+      bill_type: bill.bill_type,
       notes: bill.notes?.trim() || null,
     })
     .eq("id", billId);
@@ -195,6 +199,10 @@ export async function deleteBill(supabase: Client, billId: string) {
 
 export async function toggleBillPaid(supabase: Client, bill: Bill) {
   if (!bill.paid) {
+    if (bill.bill_type === "variable" && Number(bill.value) === 0) {
+      throw new Error("Informe o valor desta conta variavel antes de marcar como paga.");
+    }
+
     const paymentResult = await supabase.from("bill_payments").insert({
       household_id: bill.household_id,
       bill_id: bill.id,
@@ -205,7 +213,7 @@ export async function toggleBillPaid(supabase: Client, bill: Bill) {
 
     const { error } = await supabase
       .from("bills")
-      .update({ paid: false, due_date: format(getNextBillDueDate(bill), "yyyy-MM-dd") })
+      .update({ paid: true })
       .eq("id", bill.id);
     if (error) throw error;
     return;
@@ -258,6 +266,35 @@ export async function payCardCycle(supabase: Client, cycle: Cycle, monthlyLimit:
 function getNextBillDueDate(bill: Bill) {
   const currentDueDate = new Date(`${bill.due_date}T00:00:00`);
   return makeBillDate(currentDueDate.getFullYear(), currentDueDate.getMonth() + 1, bill.due_day ?? currentDueDate.getDate());
+}
+
+async function rollOverPaidBills(supabase: Client, bills: Bill[]) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const billsToRollOver = bills.filter((bill) => bill.paid && new Date(`${bill.due_date}T00:00:00`) < today);
+
+  if (!billsToRollOver.length) return bills;
+
+  const updates = await Promise.all(
+    billsToRollOver.map((bill) => {
+      const nextDueDate = getNextBillDueDate(bill);
+      return supabase
+        .from("bills")
+        .update({ paid: false, due_date: format(nextDueDate, "yyyy-MM-dd"), value: bill.bill_type === "variable" ? 0 : bill.value })
+        .eq("id", bill.id)
+        .select("*")
+        .single();
+    }),
+  );
+
+  for (const update of updates) {
+    if (update.error) throw update.error;
+  }
+
+  const updatedBills = new Map(updates.map((update) => [(update.data as Bill).id, update.data as Bill]));
+  return bills
+    .map((bill) => updatedBills.get(bill.id) ?? bill)
+    .sort((a, b) => a.due_date.localeCompare(b.due_date));
 }
 
 function makeBillDate(year: number, month: number, dueDay: number) {

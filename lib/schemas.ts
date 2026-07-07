@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const money = z.coerce.number().positive("Informe um valor maior que zero.");
+const optionalMoney = z.coerce.number().min(0, "Informe um valor igual ou maior que zero.");
 
 export const authSchema = z.object({
   email: z.string().email("Informe um e-mail valido."),
@@ -38,8 +39,9 @@ export const installmentSchema = z.object({
 
 export const billSchema = z.object({
   name: z.string().min(2, "Informe o nome da conta."),
-  value: money,
+  value: optionalMoney,
   due_date: z.string().min(1),
+  bill_type: z.enum(["fixed", "variable"]).default("fixed"),
   notes: z.string().optional(),
 });
 

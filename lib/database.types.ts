@@ -58,9 +58,9 @@ export type Database = {
         Relationships: [];
       };
       bills: {
-        Row: { id: string; household_id: string; name: string; value: number; due_date: string; due_day: number; paid: boolean; notes: string | null; created_by: string; created_at: string };
-        Insert: { id?: string; household_id: string; name: string; value: number; due_date: string; due_day?: number; paid?: boolean; notes?: string | null; created_by: string; created_at?: string };
-        Update: { name?: string; value?: number; due_date?: string; due_day?: number; paid?: boolean; notes?: string | null };
+        Row: { id: string; household_id: string; name: string; value: number; due_date: string; due_day: number; paid: boolean; bill_type: "fixed" | "variable"; notes: string | null; created_by: string; created_at: string };
+        Insert: { id?: string; household_id: string; name: string; value: number; due_date: string; due_day?: number; paid?: boolean; bill_type?: "fixed" | "variable"; notes?: string | null; created_by: string; created_at?: string };
+        Update: { name?: string; value?: number; due_date?: string; due_day?: number; paid?: boolean; bill_type?: "fixed" | "variable"; notes?: string | null };
         Relationships: [];
       };
       bill_payments: {

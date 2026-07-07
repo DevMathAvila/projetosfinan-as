@@ -83,7 +83,7 @@ export function DashboardApp() {
   const expenseForm = useForm<ExpenseForm>({ resolver: zodResolver(expenseSchema), defaultValues: { value: 0, category_id: "", description: "", expense_date: toDateInput() } });
   const categoryForm = useForm<CategoryForm>({ resolver: zodResolver(categorySchema), defaultValues: { name: "" } });
   const installmentForm = useForm<InstallmentForm>({ resolver: zodResolver(installmentSchema), defaultValues: { name: "", installment_value: 0, total_installments: 2, current_installment: 1, start_date: toDateInput(), notes: "" } });
-  const billForm = useForm<BillForm>({ resolver: zodResolver(billSchema), defaultValues: { name: "", value: 0, due_date: toDateInput(), notes: "" } });
+  const billForm = useForm<BillForm>({ resolver: zodResolver(billSchema), defaultValues: { name: "", value: 0, due_date: toDateInput(), bill_type: "fixed", notes: "" } });
   const settingsForm = useForm<SettingsForm>({ resolver: zodResolver(settingsSchema), values: overview ? { payment_day: overview.settings.payment_day, monthly_limit: overview.settings.monthly_limit } : undefined });
 
   const mutation = useMutation({
@@ -115,7 +115,9 @@ export function DashboardApp() {
   );
   const users = uniqueUsers(overview.expenses);
   const billTotals = getBillTotals(overview.bills);
-  const total = monthlyFinance.installmentsTotal + monthlyFinance.expensesTotal + billTotals.total;
+  const pendingBills = getVisiblePendingBills(overview.bills);
+  const pendingBillsTotal = pendingBills.reduce((sum, bill) => sum + Number(bill.value), 0);
+  const total = monthlyFinance.installmentsTotal + monthlyFinance.expensesTotal + pendingBillsTotal;
   const reports = getReports(overview.expenses);
 
   async function signOut() {
@@ -179,7 +181,7 @@ export function DashboardApp() {
                 <Stat label="Gastos do cartao" value={currency.format(monthlyFinance.expensesTotal)} />
               </button>
               <button className="text-left" onClick={() => setTab("bills")}>
-                <Stat label="Contas" value={currency.format(billTotals.total)} />
+                <Stat label="Contas" value={currency.format(pendingBillsTotal)} />
               </button>
               <Stat label="TOTAL" value={currency.format(total)} tone="good" />
             </div>
@@ -191,7 +193,7 @@ export function DashboardApp() {
 
             <Card>
               <h2 className="mb-3 text-lg font-bold">Contas</h2>
-              <BillList bills={overview.bills} onToggle={(bill) => mutation.mutate(() => toggleBillPaid(supabase, bill))} />
+              <BillList bills={pendingBills} onToggle={(bill) => mutation.mutate(() => toggleBillPaid(supabase, bill))} />
             </Card>
 
           </>
@@ -325,7 +327,7 @@ export function DashboardApp() {
         {tab === "bills" && (
           <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
             <Card>
-              <h2 className="mb-4 text-lg font-bold">Conta fixa</h2>
+              <h2 className="mb-4 text-lg font-bold">Conta</h2>
               <form
                 className="space-y-3"
                 onSubmit={billForm.handleSubmit((values) =>
@@ -336,17 +338,24 @@ export function DashboardApp() {
                     } else {
                       await addBill(supabase, overview.household.id, user, values);
                     }
-                    billForm.reset({ name: "", value: 0, due_date: toDateInput(), notes: "" });
+                    billForm.reset({ name: "", value: 0, due_date: toDateInput(), bill_type: "fixed", notes: "" });
                   }),
                 )}
               >
                 <Label>Nome<Input placeholder="Internet" {...billForm.register("name")} /></Label>
                 <Label>Valor<Input type="number" step="0.01" {...billForm.register("value")} /></Label>
                 <Label>Vencimento<Input type="date" {...billForm.register("due_date")} /></Label>
+                <Label>
+                  Tipo
+                  <Select {...billForm.register("bill_type")}>
+                    <option value="fixed">Fixa</option>
+                    <option value="variable">Variavel recorrente</option>
+                  </Select>
+                </Label>
                 <Label>Observacao<Textarea {...billForm.register("notes")} /></Label>
                 <div className="grid grid-cols-2 gap-2">
                   <Button className="w-full" disabled={mutation.isPending}><Plus size={18} />{editingBillId ? "Atualizar" : "Salvar conta"}</Button>
-                  {editingBillId && <GhostButton type="button" onClick={() => { setEditingBillId(null); billForm.reset({ name: "", value: 0, due_date: toDateInput(), notes: "" }); }}>Cancelar</GhostButton>}
+                  {editingBillId && <GhostButton type="button" onClick={() => { setEditingBillId(null); billForm.reset({ name: "", value: 0, due_date: toDateInput(), bill_type: "fixed", notes: "" }); }}>Cancelar</GhostButton>}
                 </div>
               </form>
             </Card>
@@ -365,7 +374,7 @@ export function DashboardApp() {
                   onToggle={(bill) => mutation.mutate(() => toggleBillPaid(supabase, bill))}
                   onEdit={(bill) => {
                     setEditingBillId(bill.id);
-                    billForm.reset({ name: bill.name, value: Number(bill.value), due_date: bill.due_date, notes: bill.notes ?? "" });
+                    billForm.reset({ name: bill.name, value: Number(bill.value), due_date: bill.due_date, bill_type: bill.bill_type ?? "fixed", notes: bill.notes ?? "" });
                   }}
                   onDelete={(bill) => {
                     if (window.confirm("Excluir esta conta fixa?")) {
@@ -497,6 +506,20 @@ function getBillTotals(bills: Bill[]) {
     },
     { total: 0, paid: 0, pending: 0 },
   );
+}
+
+function getVisiblePendingBills(bills: Bill[]) {
+  const today = startOfDay(new Date());
+
+  return bills.filter((bill) => {
+    if (bill.paid) return false;
+
+    const dueDate = startOfDay(parseISO(bill.due_date));
+    if (dueDate <= today) return true;
+
+    const previousDueDate = makePaymentDate(dueDate.getFullYear(), dueDate.getMonth() - 1, bill.due_day ?? dueDate.getDate());
+    return today > previousDueDate;
+  });
 }
 
 function getReports(expenses: Expense[]) {
@@ -771,15 +794,18 @@ function BillList({ bills, onToggle, onEdit, onDelete }: { bills: Bill[]; onTogg
     <div className="divide-y divide-line">
       {bills.map((bill) => {
         const late = !bill.paid && isBefore(parseISO(bill.due_date), new Date());
+        const variableWithoutValue = bill.bill_type === "variable" && Number(bill.value) === 0;
         return (
-          <div key={bill.id} className="flex items-center justify-between gap-3 py-3">
+          <div key={bill.id} className={`flex items-center justify-between gap-3 py-3 ${variableWithoutValue ? "rounded-lg bg-yellow-50 px-3" : ""}`}>
             <div>
               <p className="font-semibold">{bill.name}</p>
               <p className={`text-sm ${late ? "text-danger" : "text-zinc-500"}`}>{shortDate.format(parseISO(bill.due_date))} - {bill.paid ? "Pago" : late ? "Atrasada" : "Pendente"}</p>
+              <p className="text-xs text-zinc-500">{bill.bill_type === "variable" ? "Variavel recorrente" : "Fixa"}</p>
+              {variableWithoutValue && <p className="text-xs font-semibold text-warn">Aguardando valor da proxima conta</p>}
               {bill.notes && <p className="text-xs text-zinc-500">{bill.notes}</p>}
             </div>
             <div className="text-right">
-              <p className="font-bold">{currency.format(Number(bill.value))}</p>
+              <p className={`font-bold ${variableWithoutValue ? "text-warn" : ""}`}>{currency.format(Number(bill.value))}</p>
               <div className="mt-1 flex justify-end gap-1">
                 <GhostButton className="!min-h-9 px-3 py-1 text-xs" onClick={() => onToggle(bill)}>{bill.paid ? "Desmarcar" : "Pagar"}</GhostButton>
                 {onEdit && <button className="tap rounded-lg p-2 text-zinc-600" onClick={() => onEdit(bill)} aria-label="Editar conta"><Pencil size={16} /></button>}
