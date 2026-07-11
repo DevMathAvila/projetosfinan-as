@@ -235,7 +235,10 @@ export async function payCardCycle(supabase: Client, cycle: Cycle, monthlyLimit:
   const { error: closeError } = await supabase
     .from("billing_cycles")
     .update({ closed: true, end_date: format(nextStartDate, "yyyy-MM-dd") })
-    .eq("id", cycle.id);
+    .eq("id", cycle.id)
+    .eq("closed", false)
+    .select("id")
+    .single();
   if (closeError) throw closeError;
 
   const { error: createError } = await supabase.from("billing_cycles").insert({
@@ -248,11 +251,10 @@ export async function payCardCycle(supabase: Client, cycle: Cycle, monthlyLimit:
   const { data: activeInstallments, error: installmentsError } = await supabase
     .from("installments")
     .select("*")
-    .eq("household_id", cycle.household_id)
-    .eq("active", true);
+    .eq("household_id", cycle.household_id);
   if (installmentsError) throw installmentsError;
 
-  const installments = (activeInstallments ?? []) as Installment[];
+  const installments = ((activeInstallments ?? []) as Installment[]).filter((item) => item.current_installment <= item.total_installments);
 
   if (installments.length) {
     await Promise.all(

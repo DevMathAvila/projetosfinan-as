@@ -100,25 +100,28 @@ export function DashboardApp() {
     return <main className="grid min-h-screen place-items-center bg-mist p-6 text-sm font-semibold text-zinc-600">Abrindo sessao...</main>;
   }
 
-  const cardCycle = getCardCycleRange(overview.settings.payment_day);
-  const monthlyFinance = getMonthlyFinance(overview.expenses, overview.bills, overview.installments, cardCycle);
-  const cardUpcomingItems = getCardUpcomingItems(overview.expenses, overview.installments, cardCycle);
+  const cardCycle = getCardCycleRange(overview.cycle, overview.settings.payment_day);
+  const currentCycleExpenses = overview.expenses.filter((expense) => expense.cycle_id === overview.cycle.id);
+  const monthlyFinance = getMonthlyFinance(currentCycleExpenses, overview.bills, overview.installments, cardCycle);
+  const cardUpcomingItems = getCardUpcomingItems(currentCycleExpenses, overview.installments, cardCycle);
   const cardCommitment = getCardCommitment(overview.installments);
   const cardOverdue = isAfter(startOfDay(new Date()), cardCycle.end);
   const spent = monthlyFinance.cardTotal;
   const limit = Number(overview.settings.monthly_limit);
   const remaining = limit - spent;
   const percent = limit > 0 ? Math.round((spent / limit) * 100) : 0;
-  const alert = getLimitAlert(percent, remaining, overview.expenses);
+  const alert = getLimitAlert(percent, remaining, currentCycleExpenses);
   const filteredExpenses = sortExpenses(
-    overview.expenses.filter((expense) => (filterCategory === "all" || expense.category_id === filterCategory) && (filterUser === "all" || expense.created_by === filterUser)),
+    currentCycleExpenses.filter((expense) => (filterCategory === "all" || expense.category_id === filterCategory) && (filterUser === "all" || expense.created_by === filterUser)),
     sort,
   );
-  const users = uniqueUsers(overview.expenses);
+  const users = uniqueUsers(currentCycleExpenses);
   const billTotals = getBillTotals(overview.bills, overview.billPayments);
   const pendingBills = getVisiblePendingBills(overview.bills);
   const pendingBillsTotal = pendingBills.reduce((sum, bill) => sum + Number(bill.value), 0);
   const total = monthlyFinance.installmentsTotal + monthlyFinance.expensesTotal + pendingBillsTotal;
+  const activeInstallments = overview.installments.filter((item) => item.current_installment <= item.total_installments);
+  const finishedInstallments = overview.installments.filter((item) => item.current_installment > item.total_installments);
   const reports = getReports(overview.expenses);
 
   async function signOut() {
@@ -230,6 +233,10 @@ export function DashboardApp() {
             </Card>
 
             <Card>
+              <div className="mb-3">
+                <h2 className="text-lg font-bold">Extrato da fatura atual</h2>
+                <p className="text-sm text-zinc-500">{shortDate.format(cardCycle.start)} ate {shortDate.format(cardCycle.end)}</p>
+              </div>
               <div className="mb-4 flex flex-col gap-2 md:flex-row">
                 <Select value={filterCategory} onChange={(event) => setFilterCategory(event.target.value)}>
                   <option value="all">Todas categorias</option>
@@ -301,27 +308,51 @@ export function DashboardApp() {
                 </div>
               </form>
             </Card>
-            <Card>
-              <InstallmentList
-                installments={overview.installments}
-                onEdit={(installment) => {
-                  setEditingInstallmentId(installment.id);
-                  installmentForm.reset({
-                    name: installment.name,
-                    installment_value: Number(installment.installment_value),
-                    total_installments: installment.total_installments,
-                    current_installment: installment.current_installment,
-                    start_date: installment.start_date,
-                    notes: installment.notes ?? "",
-                  });
-                }}
-                onDelete={(installment) => {
-                  if (window.confirm("Excluir este parcelamento?")) {
-                    mutation.mutate(() => deleteInstallment(supabase, installment.id));
-                  }
-                }}
-              />
-            </Card>
+            <div className="space-y-4">
+              <Card>
+                <InstallmentList
+                  installments={activeInstallments}
+                  onEdit={(installment) => {
+                    setEditingInstallmentId(installment.id);
+                    installmentForm.reset({
+                      name: installment.name,
+                      installment_value: Number(installment.installment_value),
+                      total_installments: installment.total_installments,
+                      current_installment: installment.current_installment,
+                      start_date: installment.start_date,
+                      notes: installment.notes ?? "",
+                    });
+                  }}
+                  onDelete={(installment) => {
+                    if (window.confirm("Excluir este parcelamento?")) {
+                      mutation.mutate(() => deleteInstallment(supabase, installment.id));
+                    }
+                  }}
+                />
+              </Card>
+              <Card>
+                <h2 className="mb-4 text-lg font-bold">Faturas terminadas</h2>
+                <InstallmentList
+                  installments={finishedInstallments}
+                  onEdit={(installment) => {
+                    setEditingInstallmentId(installment.id);
+                    installmentForm.reset({
+                      name: installment.name,
+                      installment_value: Number(installment.installment_value),
+                      total_installments: installment.total_installments,
+                      current_installment: installment.current_installment,
+                      start_date: installment.start_date,
+                      notes: installment.notes ?? "",
+                    });
+                  }}
+                  onDelete={(installment) => {
+                    if (window.confirm("Excluir este parcelamento?")) {
+                      mutation.mutate(() => deleteInstallment(supabase, installment.id));
+                    }
+                  }}
+                />
+              </Card>
+            </div>
           </div>
         )}
 
@@ -564,15 +595,12 @@ type UpcomingItem = {
 };
 
 function getMonthlyFinance(expenses: Expense[], bills: Bill[], installments: Installment[], cycle: CycleRange) {
-  const expensesTotal = expenses
-    .filter((expense) => isWithinInterval(dateOnlyFromStored(expense.expense_date), cycle))
-    .reduce((sum, expense) => sum + Number(expense.value), 0);
+  const expensesTotal = expenses.reduce((sum, expense) => sum + Number(expense.value), 0);
 
   const billsTotal = getBillOccurrences(bills, cycle).reduce((sum, bill) => sum + bill.value, 0);
 
   const installmentsTotal = installments
-    .filter((item) => item.active && item.current_installment <= item.total_installments)
-    .filter((item) => isWithinInterval(getInstallmentDueDate(item, item.current_installment), cycle))
+    .filter((item) => item.current_installment <= item.total_installments)
     .reduce((sum, item) => sum + Number(item.installment_value), 0);
 
   return {
@@ -585,7 +613,7 @@ function getMonthlyFinance(expenses: Expense[], bills: Bill[], installments: Ins
 
 function getCardCommitment(installments: Installment[]) {
   return installments
-    .filter((item) => item.active)
+    .filter((item) => item.current_installment <= item.total_installments)
     .reduce((sum, item) => {
       const remaining = Math.max(item.total_installments - item.current_installment + 1, 0);
       return sum + Number(item.installment_value) * remaining;
@@ -596,10 +624,8 @@ function getInstallmentDueDate(item: Installment, installmentNumber: number) {
   return addMonths(parseISO(item.start_date), installmentNumber - 1);
 }
 
-function getCardCycleRange(paymentDay: number): CycleRange {
-  const today = startOfDay(new Date());
-  const currentMonthPayment = makePaymentDate(today.getFullYear(), today.getMonth(), paymentDay);
-  const start = today >= currentMonthPayment ? currentMonthPayment : makePaymentDate(today.getFullYear(), today.getMonth() - 1, paymentDay);
+function getCardCycleRange(cycle: { start_date: string }, paymentDay: number): CycleRange {
+  const start = startOfDay(parseISO(cycle.start_date));
   return { start, end: makePaymentDate(start.getFullYear(), start.getMonth() + 1, paymentDay) };
 }
 
@@ -619,10 +645,9 @@ function getCardUpcomingItems(expenses: Expense[], installments: Installment[], 
   const items: UpcomingItem[] = [];
 
   installments
-    .filter((item) => item.active)
+    .filter((item) => item.current_installment <= item.total_installments)
     .forEach((item) => {
-      const dueDate = getInstallmentDueDate(item, item.current_installment);
-      if (item.current_installment <= item.total_installments && isWithinInterval(dueDate, cycle)) {
+      if (item.current_installment <= item.total_installments) {
         items.push({
           id: `installment-${item.id}-${item.current_installment}`,
           type: "Parcela",
