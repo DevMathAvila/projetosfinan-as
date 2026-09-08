@@ -8,3 +8,4 @@ coverage
 npm-debug.log*
 dev-server.log
 dev-server.err
+tsconfig.tsbuildinfo

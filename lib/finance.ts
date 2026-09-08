@@ -2,7 +2,7 @@ import { addMonths, format } from "date-fns";
 import type { User } from "@supabase/supabase-js";
 import type { Database } from "@/lib/database.types";
 import { dateInputToISOString } from "@/lib/format";
-import type { BillForm, CategoryForm, ExpenseForm, InstallmentForm, SettingsForm } from "@/lib/schemas";
+import type { BillForm, CategoryForm, ExpenseForm, IncomeForm, InstallmentForm, SettingsForm } from "@/lib/schemas";
 import type { createClient } from "@/lib/supabase";
 
 export type Client = Omit<ReturnType<typeof createClient>, "from" | "rpc"> & {
@@ -19,6 +19,7 @@ export type Expense = Tables["expenses"]["Row"] & { categories?: Pick<Category, 
 export type Installment = Tables["installments"]["Row"];
 export type Bill = Tables["bills"]["Row"];
 export type BillPayment = Tables["bill_payments"]["Row"];
+export type Income = Tables["incomes"]["Row"];
 export type AccessInvite = Tables["access_invites"]["Row"];
 
 export async function getSessionUser(supabase: Client) {
@@ -40,7 +41,7 @@ export async function getHousehold(supabase: Client) {
 
 export async function getOverview(supabase: Client) {
   const household = await getHousehold(supabase);
-  const [settingsResult, cycleResult, categoriesResult, expensesResult, installmentsResult, billsResult, paymentsResult, historyResult, invitesResult] = await Promise.all([
+  const [settingsResult, cycleResult, categoriesResult, expensesResult, installmentsResult, billsResult, paymentsResult, historyResult, invitesResult, incomesResult] = await Promise.all([
     supabase.from("settings").select("*").eq("household_id", household.id).single(),
     supabase.from("billing_cycles").select("*").eq("household_id", household.id).eq("closed", false).single(),
     supabase.from("categories").select("*").eq("household_id", household.id).order("name"),
@@ -50,9 +51,10 @@ export async function getOverview(supabase: Client) {
     supabase.from("bill_payments").select("*").eq("household_id", household.id).order("payment_date", { ascending: false }),
     supabase.from("billing_cycles").select("*").eq("household_id", household.id).eq("closed", true).order("end_date", { ascending: false }),
     supabase.from("access_invites").select("*").eq("household_id", household.id).order("created_at", { ascending: false }),
+    supabase.from("incomes").select("*").eq("household_id", household.id).order("active", { ascending: false }).order("value", { ascending: false }),
   ]);
 
-  for (const result of [settingsResult, cycleResult, categoriesResult, expensesResult, installmentsResult, billsResult, paymentsResult, historyResult, invitesResult]) {
+  for (const result of [settingsResult, cycleResult, categoriesResult, expensesResult, installmentsResult, billsResult, paymentsResult, historyResult, invitesResult, incomesResult]) {
     if (result.error) throw result.error;
   }
 
@@ -69,6 +71,7 @@ export async function getOverview(supabase: Client) {
     billPayments: paymentsResult.data as unknown as BillPayment[],
     history: historyResult.data as unknown as Cycle[],
     invites: invitesResult.data as unknown as AccessInvite[],
+    incomes: (incomesResult.data ?? []) as unknown as Income[],
   };
 }
 
@@ -229,6 +232,43 @@ export async function toggleBillPaid(supabase: Client, bill: Bill) {
 export async function payAllBills(supabase: Client, bills: Bill[]) {
   const pendingBills = bills.filter((bill) => !bill.paid);
   await Promise.all(pendingBills.map((bill) => toggleBillPaid(supabase, bill)));
+}
+
+export async function addIncome(supabase: Client, householdId: string, user: User, income: IncomeForm) {
+  const { error } = await supabase.from("incomes").insert({
+    household_id: householdId,
+    created_by: user.id,
+    name: income.name.trim(),
+    value: income.value,
+    income_type: income.income_type,
+    active: income.active,
+    notes: income.notes?.trim() || null,
+  });
+  if (error) throw error;
+}
+
+export async function updateIncome(supabase: Client, incomeId: string, income: IncomeForm) {
+  const { error } = await supabase
+    .from("incomes")
+    .update({
+      name: income.name.trim(),
+      value: income.value,
+      income_type: income.income_type,
+      active: income.active,
+      notes: income.notes?.trim() || null,
+    })
+    .eq("id", incomeId);
+  if (error) throw error;
+}
+
+export async function deleteIncome(supabase: Client, incomeId: string) {
+  const { error } = await supabase.from("incomes").delete().eq("id", incomeId);
+  if (error) throw error;
+}
+
+export async function toggleIncomeActive(supabase: Client, income: Income) {
+  const { error } = await supabase.from("incomes").update({ active: !income.active }).eq("id", income.id);
+  if (error) throw error;
 }
 
 export async function payCardCycle(supabase: Client, cycle: Cycle, monthlyLimit: number, nextStartDate: Date) {

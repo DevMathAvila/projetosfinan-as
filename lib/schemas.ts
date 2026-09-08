@@ -45,9 +45,18 @@ export const billSchema = z.object({
   notes: z.string().optional(),
 });
 
+export const incomeSchema = z.object({
+  name: z.string().min(2, "Informe de onde vem a renda."),
+  value: money,
+  income_type: z.enum(["fixed", "variable"]).default("fixed"),
+  active: z.coerce.boolean().default(true),
+  notes: z.string().optional(),
+});
+
 export type AuthForm = z.infer<typeof authSchema>;
 export type SettingsForm = z.infer<typeof settingsSchema>;
 export type CategoryForm = z.infer<typeof categorySchema>;
 export type ExpenseForm = z.infer<typeof expenseSchema>;
 export type InstallmentForm = z.infer<typeof installmentSchema>;
 export type BillForm = z.infer<typeof billSchema>;
+export type IncomeForm = z.infer<typeof incomeSchema>;

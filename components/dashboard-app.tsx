@@ -13,10 +13,12 @@ import {
   addBill,
   addCategory,
   addExpense,
+  addIncome,
   addInstallment,
   deleteBill,
   deleteCategory,
   deleteExpense,
+  deleteIncome,
   deleteInstallment,
   getOverview,
   getSessionUser,
@@ -25,18 +27,21 @@ import {
   payCardCycle,
   saveSettings,
   toggleBillPaid,
+  toggleIncomeActive,
   updateBill,
   updateExpense,
+  updateIncome,
   updateInstallment,
   type AccessInvite,
   type Bill,
   type BillPayment,
   type Client,
   type Expense,
+  type Income,
   type Installment,
 } from "@/lib/finance";
 import { currency, dateOnlyFromStored, shortDate, shortTime, toDateInput } from "@/lib/format";
-import { billSchema, categorySchema, expenseSchema, installmentSchema, settingsSchema, type BillForm, type CategoryForm, type ExpenseForm, type InstallmentForm, type SettingsForm } from "@/lib/schemas";
+import { billSchema, categorySchema, expenseSchema, incomeSchema, installmentSchema, settingsSchema, type BillForm, type CategoryForm, type ExpenseForm, type IncomeForm, type InstallmentForm, type SettingsForm } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase";
 
 type Tab = "home" | "expenses" | "installments" | "bills" | "history" | "settings";
@@ -64,6 +69,7 @@ export function DashboardApp() {
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
   const [editingInstallmentId, setEditingInstallmentId] = useState<string | null>(null);
   const [editingBillId, setEditingBillId] = useState<string | null>(null);
+  const [editingIncomeId, setEditingIncomeId] = useState<string | null>(null);
 
   const userQuery = useQuery({ queryKey: ["user"], queryFn: () => getSessionUser(supabase), retry: false });
   const overviewQuery = useQuery({
@@ -85,6 +91,7 @@ export function DashboardApp() {
   const categoryForm = useForm<CategoryForm>({ resolver: zodResolver(categorySchema), defaultValues: { name: "" } });
   const installmentForm = useForm<InstallmentForm>({ resolver: zodResolver(installmentSchema), defaultValues: { name: "", installment_value: 0, total_installments: 2, current_installment: 1, start_date: toDateInput(), notes: "" } });
   const billForm = useForm<BillForm>({ resolver: zodResolver(billSchema), defaultValues: { name: "", value: 0, due_date: toDateInput(), bill_type: "fixed", notes: "" } });
+  const incomeForm = useForm<IncomeForm>({ resolver: zodResolver(incomeSchema), defaultValues: { name: "", value: 0, income_type: "fixed", active: true, notes: "" } });
   const settingsForm = useForm<SettingsForm>({ resolver: zodResolver(settingsSchema), values: overview ? { payment_day: overview.settings.payment_day, monthly_limit: overview.settings.monthly_limit } : undefined });
 
   const mutation = useMutation({
@@ -124,6 +131,15 @@ export function DashboardApp() {
   const finishedInstallments = overview.installments.filter((item) => item.current_installment > item.total_installments);
   const reports = getReports(overview.expenses);
 
+  // ---- Fluxo de caixa do mes: quanto entra, quanto sai, quanto sobra, quanto da pra gastar ----
+  const cashFlow = getCashFlow(overview.incomes, overview.bills, overview.installments, monthlyFinance.expensesTotal);
+  const health = getHealth(cashFlow.income, cashFlow.leftover);
+  const daysLeft = Math.max(Math.ceil((cardCycle.end.getTime() - startOfDay(new Date()).getTime()) / 86_400_000), 1);
+  const perDay = Math.max(cashFlow.remaining, 0) / daysLeft;
+  const pressurePoints = getPressurePoints(overview.bills, cashFlow.installmentsMonthly, cashFlow.income);
+  const relief = getReliefTimeline(activeInstallments);
+  const dormantRent = overview.incomes.find((income) => !income.active && /aluguel|apart/i.test(income.name));
+
   async function signOut() {
     await supabase.auth.signOut();
     router.replace("/login");
@@ -152,6 +168,44 @@ export function DashboardApp() {
 
         {tab === "home" && (
           <>
+            <Card className={healthBorder(health.tone)}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-zinc-500">Resumo do mes</p>
+                  <h2 className="text-2xl font-bold text-ink">Da pra gastar {currency.format(Math.max(cashFlow.remaining, 0))}</h2>
+                  <p className="text-sm text-zinc-500">
+                    ate {shortDate.format(cardCycle.end)} · aproximadamente <span className="font-semibold text-ink">{currency.format(perDay)}/dia</span> ({daysLeft} dias)
+                  </p>
+                </div>
+                <span className={healthBadge(health.tone)}>{health.emoji} {health.label}</span>
+              </div>
+
+              {cashFlow.income <= 0 ? (
+                <button className="mt-4 w-full rounded-lg bg-yellow-50 p-3 text-left text-sm font-semibold text-warn" onClick={() => setTab("settings")}>
+                  Cadastre a renda de voces em Ajustes para ver quanto da pra gastar por mes.
+                </button>
+              ) : (
+                <>
+                  <div className="mt-4 grid grid-cols-3 gap-2">
+                    <FlowStat label="Entra" value={cashFlow.income} tone="good" />
+                    <FlowStat label="Compromissos" value={cashFlow.committed} tone="danger" sign="-" />
+                    <FlowStat label="Sobra" value={cashFlow.leftover} tone={cashFlow.leftover >= 0 ? "good" : "danger"} />
+                  </div>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-mist">
+                    <div className={`h-full rounded-full ${cashFlow.income > 0 && cashFlow.committed / cashFlow.income >= 1 ? "bg-danger" : cashFlow.committed / cashFlow.income >= 0.85 ? "bg-warn" : "bg-good"}`} style={{ width: `${Math.min(cashFlow.income > 0 ? (cashFlow.committed / cashFlow.income) * 100 : 0, 100)}%` }} />
+                  </div>
+                  <p className="mt-2 text-xs text-zinc-500">Compromissos fixos consomem {cashFlow.income > 0 ? Math.round((cashFlow.committed / cashFlow.income) * 100) : 0}% do que entra (contas {currency.format(cashFlow.billsMonthly)} + parcelas {currency.format(cashFlow.installmentsMonthly)}).</p>
+                </>
+              )}
+
+              {dormantRent && (
+                <div className="mt-4 flex flex-col gap-2 rounded-lg bg-yellow-50 p-3 md:flex-row md:items-center md:justify-between">
+                  <p className="text-sm font-semibold text-warn">Apartamento vazio. Alugado, entra {currency.format(Number(dormantRent.value))}/mes.</p>
+                  <GhostButton className="!min-h-9 px-3 py-1 text-xs" onClick={() => mutation.mutate(() => toggleIncomeActive(supabase, dormantRent))}>Marcar como alugado</GhostButton>
+                </div>
+              )}
+            </Card>
+
             <Card>
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div className="min-w-0">
@@ -198,6 +252,18 @@ export function DashboardApp() {
             <Card>
               <h2 className="mb-3 text-lg font-bold">Contas</h2>
               <BillList bills={pendingBills} onToggle={(bill) => mutation.mutate(() => toggleBillPaid(supabase, bill))} />
+            </Card>
+
+            <Card>
+              <h2 className="mb-1 text-lg font-bold">Onde aperta</h2>
+              <p className="mb-3 text-sm text-zinc-500">O que mais consome a renda de voces todo mes.</p>
+              <PressureList items={pressurePoints} />
+            </Card>
+
+            <Card>
+              <h2 className="mb-1 text-lg font-bold">Quando alivia</h2>
+              <p className="mb-3 text-sm text-zinc-500">Parcelas terminando: quanto volta pro bolso a cada mes.</p>
+              <ReliefList items={relief} />
             </Card>
 
           </>
@@ -433,6 +499,59 @@ export function DashboardApp() {
 
         {tab === "settings" && (
           <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
+            <Card className="lg:col-span-2">
+              <h2 className="mb-1 text-lg font-bold">Renda</h2>
+              <p className="mb-4 text-sm text-zinc-500">Quanto entra por mes. Desative o aluguel do apartamento quando ele estiver vazio.</p>
+              <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
+                <form
+                  className="space-y-3"
+                  onSubmit={incomeForm.handleSubmit((values) =>
+                    mutation.mutate(async () => {
+                      if (editingIncomeId) {
+                        await updateIncome(supabase, editingIncomeId, values);
+                        setEditingIncomeId(null);
+                      } else {
+                        await addIncome(supabase, overview.household.id, user, values);
+                      }
+                      incomeForm.reset({ name: "", value: 0, income_type: "fixed", active: true, notes: "" });
+                    }),
+                  )}
+                >
+                  <Label>De onde vem<Input placeholder="Salario Mayara" {...incomeForm.register("name")} /></Label>
+                  <Label>Valor mensal<Input type="number" step="0.01" {...incomeForm.register("value")} /></Label>
+                  <Label>
+                    Tipo
+                    <Select {...incomeForm.register("income_type")}>
+                      <option value="fixed">Fixa</option>
+                      <option value="variable">Variavel</option>
+                    </Select>
+                  </Label>
+                  <label className="flex items-center gap-2 text-sm font-medium text-ink">
+                    <input type="checkbox" className="h-4 w-4" {...incomeForm.register("active")} />
+                    Conta no calculo agora (ativa)
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button className="w-full" disabled={mutation.isPending}><Plus size={18} />{editingIncomeId ? "Atualizar" : "Salvar renda"}</Button>
+                    {editingIncomeId && <GhostButton type="button" onClick={() => { setEditingIncomeId(null); incomeForm.reset({ name: "", value: 0, income_type: "fixed", active: true, notes: "" }); }}>Cancelar</GhostButton>}
+                  </div>
+                </form>
+                <div>
+                  <div className="mb-3 grid grid-cols-2 gap-2">
+                    <Stat label="Renda ativa" value={currency.format(cashFlow.income)} tone="good" />
+                    <Stat label="Compromissos" value={currency.format(cashFlow.committed)} tone={cashFlow.leftover >= 0 ? "default" : "danger"} />
+                  </div>
+                  <IncomeList
+                    incomes={overview.incomes}
+                    onToggle={(income) => mutation.mutate(() => toggleIncomeActive(supabase, income))}
+                    onEdit={(income) => {
+                      setEditingIncomeId(income.id);
+                      incomeForm.reset({ name: income.name, value: Number(income.value), income_type: income.income_type ?? "fixed", active: income.active, notes: income.notes ?? "" });
+                    }}
+                    onDelete={(income) => { if (window.confirm("Excluir esta renda?")) mutation.mutate(() => deleteIncome(supabase, income.id)); }}
+                  />
+                </div>
+              </div>
+            </Card>
             <Card>
               <h2 className="mb-4 text-lg font-bold">Ciclo do cartao</h2>
               <form className="space-y-3" onSubmit={settingsForm.handleSubmit((values) => mutation.mutate(() => saveSettings(supabase, overview.household.id, values)))}>
@@ -581,6 +700,126 @@ function getReports(expenses: Expense[]) {
     categories.set(name, { total: current.total + Number(expense.value), count: current.count + 1 });
   });
   return Array.from(categories, ([name, item]) => ({ name, ...item, percent: total ? Math.round((item.total / total) * 100) : 0 })).sort((a, b) => b.total - a.total);
+}
+
+type HealthTone = "good" | "warn" | "danger";
+
+function getCashFlow(incomes: Income[], bills: Bill[], installments: Installment[], expensesTotal: number) {
+  const income = incomes.filter((item) => item.active).reduce((sum, item) => sum + Number(item.value), 0);
+  const billsMonthly = bills.reduce((sum, bill) => sum + Number(bill.value), 0);
+  const installmentsMonthly = installments
+    .filter((item) => item.current_installment <= item.total_installments)
+    .reduce((sum, item) => sum + Number(item.installment_value), 0);
+  const committed = billsMonthly + installmentsMonthly;
+  const leftover = income - committed;
+  const remaining = leftover - expensesTotal;
+  return { income, billsMonthly, installmentsMonthly, committed, leftover, remaining };
+}
+
+function getHealth(income: number, leftover: number): { tone: HealthTone; label: string; emoji: string } {
+  if (income <= 0) return { tone: "warn", label: "Sem renda", emoji: "!" };
+  if (leftover < 0) return { tone: "danger", label: "Afogando", emoji: "🔴" };
+  if (leftover / income < 0.15) return { tone: "warn", label: "Apertado", emoji: "🟡" };
+  return { tone: "good", label: "Folga", emoji: "🟢" };
+}
+
+function healthBorder(tone: HealthTone) {
+  return tone === "danger" ? "!border-danger" : tone === "warn" ? "!border-warn" : "!border-good";
+}
+
+function healthBadge(tone: HealthTone) {
+  const base = "shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-xs font-bold ";
+  return base + (tone === "danger" ? "bg-red-50 text-danger" : tone === "warn" ? "bg-yellow-50 text-warn" : "bg-green-50 text-good");
+}
+
+function getPressurePoints(bills: Bill[], installmentsMonthly: number, income: number) {
+  const items = bills.map((bill) => ({ name: bill.name, value: Number(bill.value) }));
+  if (installmentsMonthly > 0) items.push({ name: "Parcelas do cartao", value: installmentsMonthly });
+  return items
+    .filter((item) => item.value > 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 6)
+    .map((item) => ({ ...item, percent: income > 0 ? Math.round((item.value / income) * 100) : 0 }));
+}
+
+function getReliefTimeline(installments: Installment[]) {
+  return installments
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      value: Number(item.installment_value),
+      remaining: Math.max(item.total_installments - item.current_installment + 1, 0),
+      endDate: addMonths(parseISO(item.start_date), item.total_installments - 1),
+    }))
+    .sort((a, b) => a.endDate.getTime() - b.endDate.getTime())
+    .slice(0, 6);
+}
+
+function FlowStat({ label, value, tone, sign }: { label: string; value: number; tone: HealthTone | "default"; sign?: string }) {
+  const toneClass = tone === "good" ? "text-good" : tone === "danger" ? "text-danger" : tone === "warn" ? "text-warn" : "text-ink";
+  return (
+    <div className="min-w-0 rounded-lg bg-mist p-2 text-center">
+      <p className="text-xs text-zinc-500">{label}</p>
+      <p className={`mt-0.5 break-words text-sm font-bold leading-tight ${toneClass}`}>{sign ?? ""}{currency.format(Math.abs(value))}</p>
+    </div>
+  );
+}
+
+function PressureList({ items }: { items: Array<{ name: string; value: number; percent: number }> }) {
+  if (!items.length) return <p className="text-sm text-zinc-500">Cadastre contas e parcelas para ver onde aperta.</p>;
+  const max = items[0]?.value || 1;
+  return (
+    <div className="space-y-3">
+      {items.map((item) => (
+        <div key={item.name}>
+          <div className="mb-1 flex justify-between text-sm">
+            <span className="font-semibold">{item.name}</span>
+            <span className="whitespace-nowrap">{currency.format(item.value)} · {item.percent}%</span>
+          </div>
+          <div className="h-2 rounded-full bg-mist"><div className="h-full rounded-full bg-danger" style={{ width: `${Math.round((item.value / max) * 100)}%` }} /></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ReliefList({ items }: { items: Array<{ id: string; name: string; value: number; remaining: number; endDate: Date }> }) {
+  if (!items.length) return <p className="text-sm text-zinc-500">Sem parcelas ativas por aqui.</p>;
+  return (
+    <div className="divide-y divide-line">
+      {items.map((item) => (
+        <div key={item.id} className="flex items-center justify-between gap-3 py-3">
+          <div className="min-w-0">
+            <p className="font-semibold">{item.name}</p>
+            <p className="text-sm text-zinc-500">Termina em {format(item.endDate, "MMM/yyyy", { locale: ptBR })} · faltam {item.remaining}</p>
+          </div>
+          <p className="shrink-0 whitespace-nowrap font-bold text-good">+{currency.format(item.value)}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function IncomeList({ incomes, onToggle, onEdit, onDelete }: { incomes: Income[]; onToggle: (income: Income) => void; onEdit: (income: Income) => void; onDelete: (income: Income) => void }) {
+  if (!incomes.length) return <p className="text-sm text-zinc-500">Nenhuma renda cadastrada ainda.</p>;
+  return (
+    <div className="divide-y divide-line">
+      {incomes.map((income) => (
+        <div key={income.id} className={`flex items-center justify-between gap-3 py-3 ${income.active ? "" : "opacity-60"}`}>
+          <div className="min-w-0">
+            <p className="font-semibold">{income.name}</p>
+            <p className="text-xs text-zinc-500">{income.income_type === "variable" ? "Variavel" : "Fixa"} · {income.active ? "ativa" : "inativa"}</p>
+          </div>
+          <div className="flex items-center gap-1">
+            <p className={`whitespace-nowrap font-bold ${income.active ? "text-good" : "text-zinc-400"}`}>{currency.format(Number(income.value))}</p>
+            <GhostButton className="!min-h-9 px-3 py-1 text-xs" onClick={() => onToggle(income)}>{income.active ? "Desativar" : "Ativar"}</GhostButton>
+            <button className="tap rounded-lg p-2 text-zinc-600" onClick={() => onEdit(income)} aria-label="Editar renda"><Pencil size={16} /></button>
+            <button className="tap rounded-lg p-2 text-danger" onClick={() => onDelete(income)} aria-label="Excluir renda"><Trash2 size={16} /></button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 type CycleRange = { start: Date; end: Date };
