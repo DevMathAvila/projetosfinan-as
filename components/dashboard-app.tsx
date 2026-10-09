@@ -113,6 +113,12 @@ export function DashboardApp() {
   const cardUpcomingItems = getCardUpcomingItems(currentCycleExpenses, overview.installments, cardCycle);
   const cardCommitment = getCardCommitment(overview.installments);
   const cardOverdue = isAfter(startOfDay(new Date()), cardCycle.end);
+  const cardCycleNotStarted = isAfter(cardCycle.start, startOfDay(new Date()));
+  const payCard = () => {
+    if (cardCycleNotStarted || mutation.isPending) return;
+    if (!window.confirm(`Fechar a fatura de ${shortDate.format(cardCycle.start)} ate ${shortDate.format(cardCycle.end)} e abrir o proximo ciclo?`)) return;
+    mutation.mutate(() => payCardCycle(supabase, overview.cycle, overview.settings.monthly_limit, cardCycle.end));
+  };
   const spent = monthlyFinance.cardTotal;
   const limit = Number(overview.settings.monthly_limit);
   const remaining = limit - spent;
@@ -212,8 +218,9 @@ export function DashboardApp() {
                   <p className="text-sm text-zinc-500">Ciclo atual: {shortDate.format(cardCycle.start)} ate {shortDate.format(cardCycle.end)}</p>
                   <h2 className="text-2xl font-bold">{percent}% utilizado</h2>
                   {cardOverdue && <p className="mt-1 text-sm font-semibold text-danger">Cartao em atraso. Pague para abrir o proximo ciclo.</p>}
+                  {cardCycleNotStarted && <p className="mt-1 text-sm font-semibold text-good">Fatura anterior paga. Este ciclo comeca em {shortDate.format(cardCycle.start)}.</p>}
                 </div>
-                <Button className="w-full md:w-auto" onClick={() => mutation.mutate(() => payCardCycle(supabase, overview.cycle, overview.settings.monthly_limit, cardCycle.end))}>
+                <Button className="w-full md:w-auto" disabled={mutation.isPending || cardCycleNotStarted} onClick={payCard}>
                   <CreditCard size={18} />
                   Pagar cartao
                 </Button>
@@ -488,7 +495,7 @@ export function DashboardApp() {
         {tab === "history" && (
           <div className="space-y-4">
             <Card>
-              <Button className="w-full" disabled={mutation.isPending} onClick={() => mutation.mutate(() => payCardCycle(supabase, overview.cycle, overview.settings.monthly_limit, cardCycle.end))}>
+              <Button className="w-full" disabled={mutation.isPending || cardCycleNotStarted} onClick={payCard}>
                 Pagar Cartao
               </Button>
             </Card>
