@@ -1,9 +1,9 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { addMonths, endOfMonth, format, isAfter, isBefore, isWithinInterval, parseISO } from "date-fns";
+import { addMonths, endOfMonth, format, isAfter, isBefore, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { BarChart3, CalendarCheck, CreditCard, ListFilter, LogOut, Pencil, Plus, ReceiptText, Settings, Tags, Trash2 } from "lucide-react";
+import { BarChart3, CalendarCheck, CreditCard, HandCoins, KeyRound, ListFilter, LogOut, Pencil, Plus, ReceiptText, Settings, Tags, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
@@ -13,11 +13,14 @@ import {
   addBill,
   addCategory,
   addExpense,
+  addExtraIncome,
   addIncome,
   addInstallment,
+  changePassword,
   deleteBill,
   deleteCategory,
   deleteExpense,
+  deleteExtraIncome,
   deleteIncome,
   deleteInstallment,
   getOverview,
@@ -37,11 +40,29 @@ import {
   type BillPayment,
   type Client,
   type Expense,
+  type ExtraIncome,
   type Income,
   type Installment,
 } from "@/lib/finance";
 import { currency, dateOnlyFromStored, shortDate, shortTime, toDateInput } from "@/lib/format";
-import { billSchema, categorySchema, expenseSchema, incomeSchema, installmentSchema, settingsSchema, type BillForm, type CategoryForm, type ExpenseForm, type IncomeForm, type InstallmentForm, type SettingsForm } from "@/lib/schemas";
+import {
+  billSchema,
+  categorySchema,
+  expenseSchema,
+  extraIncomeSchema,
+  incomeSchema,
+  installmentSchema,
+  passwordSchema,
+  settingsSchema,
+  type BillForm,
+  type CategoryForm,
+  type ExpenseForm,
+  type ExtraIncomeForm,
+  type IncomeForm,
+  type InstallmentForm,
+  type PasswordForm,
+  type SettingsForm,
+} from "@/lib/schemas";
 import { createClient } from "@/lib/supabase";
 
 type Tab = "home" | "expenses" | "installments" | "bills" | "history" | "settings";
@@ -70,6 +91,7 @@ export function DashboardApp() {
   const [editingInstallmentId, setEditingInstallmentId] = useState<string | null>(null);
   const [editingBillId, setEditingBillId] = useState<string | null>(null);
   const [editingIncomeId, setEditingIncomeId] = useState<string | null>(null);
+  const [passwordMessage, setPasswordMessage] = useState("");
 
   const userQuery = useQuery({ queryKey: ["user"], queryFn: () => getSessionUser(supabase), retry: false });
   const overviewQuery = useQuery({
@@ -92,6 +114,8 @@ export function DashboardApp() {
   const installmentForm = useForm<InstallmentForm>({ resolver: zodResolver(installmentSchema), defaultValues: { name: "", installment_value: 0, total_installments: 2, current_installment: 1, start_date: toDateInput(), notes: "" } });
   const billForm = useForm<BillForm>({ resolver: zodResolver(billSchema), defaultValues: { name: "", value: 0, due_date: toDateInput(), bill_type: "fixed", notes: "" } });
   const incomeForm = useForm<IncomeForm>({ resolver: zodResolver(incomeSchema), defaultValues: { name: "", value: 0, income_type: "fixed", active: true, notes: "" } });
+  const extraIncomeForm = useForm<ExtraIncomeForm>({ resolver: zodResolver(extraIncomeSchema), defaultValues: { value: 0, description: "", received_date: toDateInput() } });
+  const passwordForm = useForm<PasswordForm>({ resolver: zodResolver(passwordSchema), defaultValues: { password: "", confirm: "" } });
   const settingsForm = useForm<SettingsForm>({ resolver: zodResolver(settingsSchema), values: overview ? { payment_day: overview.settings.payment_day, monthly_limit: overview.settings.monthly_limit } : undefined });
 
   const mutation = useMutation({
@@ -109,7 +133,8 @@ export function DashboardApp() {
 
   const cardCycle = getCardCycleRange(overview.cycle, overview.settings.payment_day);
   const currentCycleExpenses = overview.expenses.filter((expense) => expense.cycle_id === overview.cycle.id);
-  const monthlyFinance = getMonthlyFinance(currentCycleExpenses, overview.bills, overview.installments, cardCycle);
+  const currentCycleExtras = overview.extraIncomes.filter((extra) => extra.cycle_id === overview.cycle.id);
+  const monthlyFinance = getMonthlyFinance(currentCycleExpenses, overview.installments);
   const cardUpcomingItems = getCardUpcomingItems(currentCycleExpenses, overview.installments, cardCycle);
   const cardCommitment = getCardCommitment(overview.installments);
   const cardOverdue = isAfter(startOfDay(new Date()), cardCycle.end);
@@ -132,17 +157,22 @@ export function DashboardApp() {
   const billTotals = getBillTotals(overview.bills, overview.billPayments);
   const pendingBills = getVisiblePendingBills(overview.bills);
   const pendingBillsTotal = pendingBills.reduce((sum, bill) => sum + Number(bill.value), 0);
+  const unpaidBills = overview.bills.filter((bill) => !bill.paid);
+  const latestPayments = getLatestPaymentsByBill(overview.billPayments);
   const total = monthlyFinance.installmentsTotal + monthlyFinance.expensesTotal + pendingBillsTotal;
   const activeInstallments = overview.installments.filter((item) => item.current_installment <= item.total_installments);
   const finishedInstallments = overview.installments.filter((item) => item.current_installment > item.total_installments);
   const reports = getReports(overview.expenses);
 
   // ---- Fluxo de caixa do mes: quanto entra, quanto sai, quanto sobra, quanto da pra gastar ----
-  const cashFlow = getCashFlow(overview.incomes, overview.bills, overview.installments, monthlyFinance.expensesTotal);
-  const health = getHealth(cashFlow.income, cashFlow.leftover);
+  const cashFlow = getCashFlow(overview.incomes, currentCycleExtras, overview.bills, latestPayments, overview.installments, monthlyFinance.expensesTotal);
+  const health = getHealth(cashFlow.income, cashFlow.leftover, cashFlow.remaining);
   const daysLeft = Math.max(Math.ceil((cardCycle.end.getTime() - startOfDay(new Date()).getTime()) / 86_400_000), 1);
   const perDay = Math.max(cashFlow.remaining, 0) / daysLeft;
-  const pressurePoints = getPressurePoints(overview.bills, cashFlow.installmentsMonthly, cashFlow.income);
+  // Passou do que dava: mostra o valor negativo em vez de travar em zero (so quando ha renda cadastrada).
+  const overspent = cashFlow.income > 0 && cashFlow.remaining < 0;
+  const spendable = overspent ? cashFlow.remaining : Math.max(cashFlow.remaining, 0);
+  const pressurePoints = getPressurePoints(overview.bills, latestPayments, cashFlow.installmentsMonthly, cashFlow.income);
   const relief = getReliefTimeline(activeInstallments);
   const dormantRent = overview.incomes.find((income) => !income.active && /aluguel|apart/i.test(income.name));
 
@@ -178,10 +208,14 @@ export function DashboardApp() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-zinc-500">Resumo do mes</p>
-                  <h2 className="text-2xl font-bold text-ink">Da pra gastar {currency.format(Math.max(cashFlow.remaining, 0))}</h2>
-                  <p className="text-sm text-zinc-500">
-                    ate {shortDate.format(cardCycle.end)} · aproximadamente <span className="font-semibold text-ink">{currency.format(perDay)}/dia</span> ({daysLeft} dias)
-                  </p>
+                  <h2 className={`text-2xl font-bold ${overspent ? "text-danger" : "text-ink"}`}>Da pra gastar {currency.format(spendable)}</h2>
+                  {overspent ? (
+                    <p className="text-sm font-semibold text-danger">Voces ja gastaram {currency.format(Math.abs(spendable))} a mais do que dava ate {shortDate.format(cardCycle.end)}.</p>
+                  ) : (
+                    <p className="text-sm text-zinc-500">
+                      ate {shortDate.format(cardCycle.end)} · aproximadamente <span className="font-semibold text-ink">{currency.format(perDay)}/dia</span> ({daysLeft} dias)
+                    </p>
+                  )}
                 </div>
                 <span className={healthBadge(health.tone)}>{health.emoji} {health.label}</span>
               </div>
@@ -201,6 +235,8 @@ export function DashboardApp() {
                     <div className={`h-full rounded-full ${cashFlow.income > 0 && cashFlow.committed / cashFlow.income >= 1 ? "bg-danger" : cashFlow.committed / cashFlow.income >= 0.85 ? "bg-warn" : "bg-good"}`} style={{ width: `${Math.min(cashFlow.income > 0 ? (cashFlow.committed / cashFlow.income) * 100 : 0, 100)}%` }} />
                   </div>
                   <p className="mt-2 text-xs text-zinc-500">Compromissos fixos consomem {cashFlow.income > 0 ? Math.round((cashFlow.committed / cashFlow.income) * 100) : 0}% do que entra (contas {currency.format(cashFlow.billsMonthly)} + parcelas {currency.format(cashFlow.installmentsMonthly)}).</p>
+                  {cashFlow.extraIncome > 0 && <p className="mt-1 text-xs font-semibold text-good">Entra inclui {currency.format(cashFlow.extraIncome)} de renda extra deste ciclo.</p>}
+                  {cashFlow.estimatedBills > 0 && <p className="mt-1 text-xs text-zinc-500">Contas variaveis ainda sem valor entram pelo ultimo valor pago.</p>}
                 </>
               )}
 
@@ -210,6 +246,41 @@ export function DashboardApp() {
                   <GhostButton className="!min-h-9 px-3 py-1 text-xs" onClick={() => mutation.mutate(() => toggleIncomeActive(supabase, dormantRent))}>Marcar como alugado</GhostButton>
                 </div>
               )}
+            </Card>
+
+            <Card>
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="flex items-center gap-2 text-lg font-bold"><HandCoins size={20} />Renda extra</h2>
+                  <p className="text-sm text-zinc-500">Entrou um dinheiro a mais neste ciclo? Lance aqui que ele soma no que da pra gastar.</p>
+                </div>
+                <p className="shrink-0 whitespace-nowrap text-lg font-bold text-good">+{currency.format(cashFlow.extraIncome)}</p>
+              </div>
+              <form
+                className="grid grid-cols-2 gap-2 md:grid-cols-[140px_170px_1fr_auto] md:items-end"
+                onSubmit={extraIncomeForm.handleSubmit((values) =>
+                  mutation.mutate(async () => {
+                    await addExtraIncome(supabase, overview.household.id, overview.cycle.id, user, values);
+                    extraIncomeForm.reset({ value: 0, description: "", received_date: toDateInput() });
+                  }),
+                )}
+              >
+                <Label>Valor<Input type="number" step="0.01" inputMode="decimal" {...extraIncomeForm.register("value")} /></Label>
+                <Label>Data<Input type="date" {...extraIncomeForm.register("received_date")} /></Label>
+                <div className="col-span-2 md:col-span-1">
+                  <Label>De onde veio<Input placeholder="Venda, pix, bico..." {...extraIncomeForm.register("description")} /></Label>
+                </div>
+                <Button className="col-span-2 md:col-span-1" disabled={mutation.isPending}><Plus size={18} />Somar</Button>
+              </form>
+              {extraIncomeForm.formState.errors.value && <p className="mt-1 text-xs text-danger">{extraIncomeForm.formState.errors.value.message}</p>}
+              <ExtraIncomeList
+                items={currentCycleExtras}
+                onDelete={(item) => {
+                  if (window.confirm("Excluir esta renda extra?")) {
+                    mutation.mutate(() => deleteExtraIncome(supabase, item.id));
+                  }
+                }}
+              />
             </Card>
 
             <Card>
@@ -470,7 +541,16 @@ export function DashboardApp() {
                 <Stat label="Pago" value={currency.format(billTotals.paid)} tone="good" />
                 <Stat label="Pendente" value={currency.format(billTotals.pending)} tone="warn" />
               </div>
-              <Button className="w-full" disabled={mutation.isPending || !overview.bills.length} onClick={() => mutation.mutate(() => payAllBills(supabase, overview.bills))}>
+              <Button
+                className="w-full"
+                disabled={mutation.isPending || !unpaidBills.length}
+                onClick={() => {
+                  const unpaidTotal = unpaidBills.reduce((sum, bill) => sum + Number(bill.value), 0);
+                  if (window.confirm(`Marcar ${unpaidBills.length} contas pendentes como pagas (${currency.format(unpaidTotal)})?`)) {
+                    mutation.mutate(() => payAllBills(supabase, overview.bills));
+                  }
+                }}
+              >
                 Todas estao pagas
               </Button>
               <Card>
@@ -544,7 +624,7 @@ export function DashboardApp() {
                 </form>
                 <div>
                   <div className="mb-3 grid grid-cols-2 gap-2">
-                    <Stat label="Renda ativa" value={currency.format(cashFlow.income)} tone="good" />
+                    <Stat label="Renda ativa" value={currency.format(cashFlow.recurringIncome)} tone="good" />
                     <Stat label="Compromissos" value={currency.format(cashFlow.committed)} tone={cashFlow.leftover >= 0 ? "default" : "danger"} />
                   </div>
                   <IncomeList
@@ -598,10 +678,47 @@ export function DashboardApp() {
                 {overview.categories.map((category) => (
                   <div key={category.id} className="flex items-center justify-between rounded-lg border border-line bg-white px-3 py-2">
                     <span className="font-medium">{category.name}</span>
-                    <button className="tap rounded-lg p-2 text-danger" onClick={() => mutation.mutate(() => deleteCategory(supabase, category.id))} aria-label="Excluir categoria"><Trash2 size={18} /></button>
+                    <button
+                      className="tap rounded-lg p-2 text-danger"
+                      onClick={() => {
+                        if (window.confirm(`Excluir a categoria ${category.name}? Os gastos dela vao ficar como "Sem categoria" e isso nao tem volta.`)) {
+                          mutation.mutate(() => deleteCategory(supabase, category.id));
+                        }
+                      }}
+                      aria-label="Excluir categoria"
+                    >
+                      <Trash2 size={18} />
+                    </button>
                   </div>
                 ))}
               </div>
+            </Card>
+            <Card>
+              <h2 className="mb-4 flex items-center gap-2 text-lg font-bold"><KeyRound size={20} />Trocar senha</h2>
+              <form
+                className="space-y-3"
+                onSubmit={passwordForm.handleSubmit((values) => {
+                  setPasswordMessage("");
+                  mutation.mutate(async () => {
+                    await changePassword(supabase, values.password);
+                    passwordForm.reset({ password: "", confirm: "" });
+                    setPasswordMessage("Senha alterada. Use a nova senha no proximo login.");
+                  });
+                })}
+              >
+                <Label>
+                  Nova senha
+                  <Input type="password" autoComplete="new-password" {...passwordForm.register("password")} />
+                  {passwordForm.formState.errors.password && <span className="text-xs text-danger">{passwordForm.formState.errors.password.message}</span>}
+                </Label>
+                <Label>
+                  Repita a nova senha
+                  <Input type="password" autoComplete="new-password" {...passwordForm.register("confirm")} />
+                  {passwordForm.formState.errors.confirm && <span className="text-xs text-danger">{passwordForm.formState.errors.confirm.message}</span>}
+                </Label>
+                <Button className="w-full" disabled={mutation.isPending}>Salvar nova senha</Button>
+                {passwordMessage && <p className="rounded-lg bg-green-50 p-3 text-sm font-medium text-good">{passwordMessage}</p>}
+              </form>
             </Card>
           </div>
         )}
@@ -711,21 +828,35 @@ function getReports(expenses: Expense[]) {
 
 type HealthTone = "good" | "warn" | "danger";
 
-function getCashFlow(incomes: Income[], bills: Bill[], installments: Installment[], expensesTotal: number) {
-  const income = incomes.filter((item) => item.active).reduce((sum, item) => sum + Number(item.value), 0);
-  const billsMonthly = bills.reduce((sum, bill) => sum + Number(bill.value), 0);
+function getCashFlow(incomes: Income[], extraIncomes: ExtraIncome[], bills: Bill[], latestPayments: Map<string, BillPayment>, installments: Installment[], expensesTotal: number) {
+  const recurringIncome = incomes.filter((item) => item.active).reduce((sum, item) => sum + Number(item.value), 0);
+  const extraIncome = extraIncomes.reduce((sum, item) => sum + Number(item.value), 0);
+  const income = recurringIncome + extraIncome;
+  const billsMonthly = bills.reduce((sum, bill) => sum + getBillMonthlyValue(bill, latestPayments), 0);
+  const estimatedBills = bills.filter((bill) => isEstimatedBill(bill, latestPayments)).length;
   const installmentsMonthly = installments
     .filter((item) => item.current_installment <= item.total_installments)
     .reduce((sum, item) => sum + Number(item.installment_value), 0);
   const committed = billsMonthly + installmentsMonthly;
   const leftover = income - committed;
   const remaining = leftover - expensesTotal;
-  return { income, billsMonthly, installmentsMonthly, committed, leftover, remaining };
+  return { recurringIncome, extraIncome, income, billsMonthly, estimatedBills, installmentsMonthly, committed, leftover, remaining };
 }
 
-function getHealth(income: number, leftover: number): { tone: HealthTone; label: string; emoji: string } {
+// Conta variavel volta a zero na virada do mes ate alguem digitar o valor novo; enquanto isso, estima pelo ultimo valor pago.
+function isEstimatedBill(bill: Bill, latestPayments: Map<string, BillPayment>) {
+  return bill.bill_type === "variable" && Number(bill.value) === 0 && latestPayments.has(bill.id);
+}
+
+function getBillMonthlyValue(bill: Bill, latestPayments: Map<string, BillPayment>) {
+  if (isEstimatedBill(bill, latestPayments)) return Number(latestPayments.get(bill.id)?.value ?? 0);
+  return Number(bill.value);
+}
+
+function getHealth(income: number, leftover: number, remaining: number): { tone: HealthTone; label: string; emoji: string } {
   if (income <= 0) return { tone: "warn", label: "Sem renda", emoji: "!" };
   if (leftover < 0) return { tone: "danger", label: "Afogando", emoji: "🔴" };
+  if (remaining < 0) return { tone: "danger", label: "Estourou", emoji: "🔴" };
   if (leftover / income < 0.15) return { tone: "warn", label: "Apertado", emoji: "🟡" };
   return { tone: "good", label: "Folga", emoji: "🟢" };
 }
@@ -739,8 +870,8 @@ function healthBadge(tone: HealthTone) {
   return base + (tone === "danger" ? "bg-red-50 text-danger" : tone === "warn" ? "bg-yellow-50 text-warn" : "bg-green-50 text-good");
 }
 
-function getPressurePoints(bills: Bill[], installmentsMonthly: number, income: number) {
-  const items = bills.map((bill) => ({ name: bill.name, value: Number(bill.value) }));
+function getPressurePoints(bills: Bill[], latestPayments: Map<string, BillPayment>, installmentsMonthly: number, income: number) {
+  const items = bills.map((bill) => ({ name: bill.name, value: getBillMonthlyValue(bill, latestPayments) }));
   if (installmentsMonthly > 0) items.push({ name: "Parcelas do cartao", value: installmentsMonthly });
   return items
     .filter((item) => item.value > 0)
@@ -767,7 +898,27 @@ function FlowStat({ label, value, tone, sign }: { label: string; value: number; 
   return (
     <div className="min-w-0 rounded-lg bg-mist p-2 text-center">
       <p className="text-xs text-zinc-500">{label}</p>
-      <p className={`mt-0.5 break-words text-sm font-bold leading-tight ${toneClass}`}>{sign ?? ""}{currency.format(Math.abs(value))}</p>
+      <p className={`mt-0.5 break-words text-sm font-bold leading-tight ${toneClass}`}>{sign ? `${sign}${currency.format(Math.abs(value))}` : currency.format(value)}</p>
+    </div>
+  );
+}
+
+function ExtraIncomeList({ items, onDelete }: { items: ExtraIncome[]; onDelete: (item: ExtraIncome) => void }) {
+  if (!items.length) return <p className="mt-3 text-sm text-zinc-500">Nenhuma renda extra neste ciclo.</p>;
+  return (
+    <div className="mt-3 divide-y divide-line">
+      {items.map((item) => (
+        <div key={item.id} className="flex items-center justify-between gap-3 py-3">
+          <div className="min-w-0">
+            <p className="font-semibold">{item.description || "Renda extra"}</p>
+            <p className="text-xs text-zinc-500">{shortDate.format(parseISO(item.received_date))}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <p className="whitespace-nowrap font-bold text-good">+{currency.format(Number(item.value))}</p>
+            <button className="tap rounded-lg p-2 text-danger" onClick={() => onDelete(item)} aria-label="Excluir renda extra"><Trash2 size={16} /></button>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -840,10 +991,8 @@ type UpcomingItem = {
   paid?: boolean;
 };
 
-function getMonthlyFinance(expenses: Expense[], bills: Bill[], installments: Installment[], cycle: CycleRange) {
+function getMonthlyFinance(expenses: Expense[], installments: Installment[]) {
   const expensesTotal = expenses.reduce((sum, expense) => sum + Number(expense.value), 0);
-
-  const billsTotal = getBillOccurrences(bills, cycle).reduce((sum, bill) => sum + bill.value, 0);
 
   const installmentsTotal = installments
     .filter((item) => item.current_installment <= item.total_installments)
@@ -851,7 +1000,6 @@ function getMonthlyFinance(expenses: Expense[], bills: Bill[], installments: Ins
 
   return {
     expensesTotal,
-    billsTotal,
     installmentsTotal,
     cardTotal: expensesTotal + installmentsTotal,
   };
@@ -864,10 +1012,6 @@ function getCardCommitment(installments: Installment[]) {
       const remaining = Math.max(item.total_installments - item.current_installment + 1, 0);
       return sum + Number(item.installment_value) * remaining;
     }, 0);
-}
-
-function getInstallmentDueDate(item: Installment, installmentNumber: number) {
-  return addMonths(parseISO(item.start_date), installmentNumber - 1);
 }
 
 function getCardCycleRange(cycle: { start_date: string }, paymentDay: number): CycleRange {
@@ -905,8 +1049,8 @@ function getCardUpcomingItems(expenses: Expense[], installments: Installment[], 
       }
     });
 
-  expenses
-    .filter((expense) => isWithinInterval(dateOnlyFromStored(expense.expense_date), cycle))
+  // Lista todos os gastos do ciclo aberto (mesmo criterio do total da fatura), sem filtrar pela data da compra.
+  [...expenses]
     .sort((a, b) => dateOnlyFromStored(a.expense_date).getTime() - dateOnlyFromStored(b.expense_date).getTime())
     .forEach((expense) => {
       items.push({
@@ -920,83 +1064,6 @@ function getCardUpcomingItems(expenses: Expense[], installments: Installment[], 
     });
 
   return items.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
-}
-
-function getFutureItems(expenses: Expense[], bills: Bill[], installments: Installment[], cycle: CycleRange) {
-  const items: UpcomingItem[] = [];
-
-  bills
-    .filter((bill) => parseISO(bill.due_date) > cycle.end)
-    .forEach((bill) => {
-      items.push({
-        id: `future-bill-${bill.id}`,
-        type: "Conta",
-        title: bill.name,
-        subtitle: bill.notes || "Conta futura",
-        value: Number(bill.value),
-        dueDate: parseISO(bill.due_date),
-      });
-    });
-
-  installments
-    .filter((item) => item.active)
-    .forEach((item) => {
-      for (let installmentNumber = item.current_installment + 1; installmentNumber <= item.total_installments; installmentNumber += 1) {
-        const dueDate = getInstallmentDueDate(item, installmentNumber);
-        if (dueDate > cycle.end) {
-          items.push({
-            id: `future-installment-${item.id}-${installmentNumber}`,
-            type: "Parcela",
-            title: item.name,
-            subtitle: `Parcela ${installmentNumber}/${item.total_installments}`,
-            value: Number(item.installment_value),
-            dueDate,
-          });
-        }
-      }
-    });
-
-  expenses
-    .filter((expense) => dateOnlyFromStored(expense.expense_date) > cycle.end)
-    .forEach((expense) => {
-      items.push({
-        id: `future-expense-${expense.id}`,
-        type: "Gasto",
-        title: expense.categories?.name ?? "Gasto futuro",
-        subtitle: expense.description ?? "Lancamento futuro",
-        value: Number(expense.value),
-        dueDate: dateOnlyFromStored(expense.expense_date),
-      });
-    });
-
-  return items.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
-}
-
-function getBillOccurrences(bills: Bill[], cycle: CycleRange) {
-  return bills.flatMap((bill) => {
-    if (bill.paid) return [];
-
-    const occurrences: Array<Bill & { dueDate: Date; overdue: boolean; value: number }> = [];
-    let dueDate = startOfDay(parseISO(bill.due_date));
-    const dueDay = bill.due_day ?? dueDate.getDate();
-    let guard = 0;
-
-    while (dueDate <= cycle.end && guard < 36) {
-      if (dueDate < cycle.start || isWithinInterval(dueDate, cycle)) {
-        occurrences.push({
-          ...bill,
-          dueDate,
-          overdue: dueDate < cycle.start,
-          value: Number(bill.value),
-        });
-      }
-
-      dueDate = makePaymentDate(dueDate.getFullYear(), dueDate.getMonth() + 1, dueDay);
-      guard += 1;
-    }
-
-    return occurrences;
-  });
 }
 
 function UpcomingList({ items, emptyText = "Nenhum vencimento encontrado." }: { items: UpcomingItem[]; emptyText?: string }) {
@@ -1083,7 +1150,7 @@ function BillList({ bills, onToggle, onEdit, onDelete }: { bills: Bill[]; onTogg
   return (
     <div className="divide-y divide-line">
       {bills.map((bill) => {
-        const late = !bill.paid && isBefore(parseISO(bill.due_date), new Date());
+        const late = !bill.paid && isBefore(parseISO(bill.due_date), startOfDay(new Date()));
         const variableWithoutValue = bill.bill_type === "variable" && Number(bill.value) === 0;
         return (
           <div key={bill.id} className={`flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between ${variableWithoutValue ? "rounded-lg bg-yellow-50 px-3" : ""}`}>

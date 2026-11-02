@@ -45,7 +45,7 @@ export default function LoginPage() {
       if (mode === "recover") {
         const { error } = await supabase.auth.resetPasswordForEmail(values.email, { redirectTo: `${location.origin}/auth/callback` });
         if (error) throw error;
-        setMessage("Enviamos o link de recuperacao para o e-mail informado.");
+        setMessage("Enviamos o link de recuperacao para o e-mail informado. Abra o link neste mesmo aparelho e depois va em Ajustes > Trocar senha.");
       }
     } catch (error) {
       setMessage(getAuthErrorMessage(error));

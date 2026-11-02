@@ -137,6 +137,19 @@ create table if not exists public.incomes (
 
 create index if not exists incomes_household_idx on public.incomes (household_id);
 
+create table if not exists public.extra_incomes (
+  id uuid primary key default gen_random_uuid(),
+  household_id uuid not null references public.households(id) on delete cascade,
+  cycle_id uuid not null references public.billing_cycles(id) on delete cascade,
+  value numeric(12,2) not null check (value > 0),
+  description text,
+  received_date date not null default current_date,
+  created_by uuid not null references public.profiles(id),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists extra_incomes_household_cycle_idx on public.extra_incomes (household_id, cycle_id);
+
 create index if not exists expenses_household_expense_date_idx
 on public.expenses (household_id, expense_date);
 
@@ -303,8 +316,10 @@ alter table public.installments enable row level security;
 alter table public.bills enable row level security;
 alter table public.bill_payments enable row level security;
 alter table public.incomes enable row level security;
+alter table public.extra_incomes enable row level security;
 
 drop policy if exists "profiles self read" on public.profiles;
+drop policy if exists "profiles household read" on public.profiles;
 drop policy if exists "profiles self update" on public.profiles;
 drop policy if exists "households member read" on public.households;
 drop policy if exists "households owner update" on public.households;
@@ -319,8 +334,10 @@ drop policy if exists "installments member all" on public.installments;
 drop policy if exists "bills member all" on public.bills;
 drop policy if exists "bill_payments member all" on public.bill_payments;
 drop policy if exists "incomes member all" on public.incomes;
+drop policy if exists "extra_incomes member all" on public.extra_incomes;
 
 create policy "profiles self read" on public.profiles for select using (id = auth.uid());
+create policy "profiles household read" on public.profiles for select using (exists (select 1 from public.household_members hm where hm.user_id = profiles.id and public.is_household_member(hm.household_id)));
 create policy "profiles self update" on public.profiles for update using (id = auth.uid());
 
 create policy "households member read" on public.households for select using (public.is_household_member(id));
@@ -338,3 +355,4 @@ create policy "installments member all" on public.installments for all using (pu
 create policy "bills member all" on public.bills for all using (public.is_household_member(household_id)) with check (public.is_household_member(household_id));
 create policy "bill_payments member all" on public.bill_payments for all using (public.is_household_member(household_id)) with check (public.is_household_member(household_id));
 create policy "incomes member all" on public.incomes for all using (public.is_household_member(household_id)) with check (public.is_household_member(household_id));
+create policy "extra_incomes member all" on public.extra_incomes for all using (public.is_household_member(household_id)) with check (public.is_household_member(household_id));

@@ -53,6 +53,20 @@ export const incomeSchema = z.object({
   notes: z.string().optional(),
 });
 
+export const extraIncomeSchema = z.object({
+  value: money,
+  description: z.string().optional(),
+  received_date: z.string().min(1, "Informe a data."),
+});
+
+export const passwordSchema = z.object({
+  password: z.string().min(6, "Use pelo menos 6 caracteres."),
+  confirm: z.string(),
+}).refine((data) => data.password === data.confirm, {
+  message: "As senhas nao conferem.",
+  path: ["confirm"],
+});
+
 export type AuthForm = z.infer<typeof authSchema>;
 export type SettingsForm = z.infer<typeof settingsSchema>;
 export type CategoryForm = z.infer<typeof categorySchema>;
@@ -60,3 +74,5 @@ export type ExpenseForm = z.infer<typeof expenseSchema>;
 export type InstallmentForm = z.infer<typeof installmentSchema>;
 export type BillForm = z.infer<typeof billSchema>;
 export type IncomeForm = z.infer<typeof incomeSchema>;
+export type ExtraIncomeForm = z.infer<typeof extraIncomeSchema>;
+export type PasswordForm = z.infer<typeof passwordSchema>;

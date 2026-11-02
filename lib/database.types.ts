@@ -75,6 +75,12 @@ export type Database = {
         Update: { name?: string; value?: number; income_type?: "fixed" | "variable"; active?: boolean; notes?: string | null };
         Relationships: [];
       };
+      extra_incomes: {
+        Row: { id: string; household_id: string; cycle_id: string; value: number; description: string | null; received_date: string; created_by: string; created_at: string };
+        Insert: { id?: string; household_id: string; cycle_id: string; value: number; description?: string | null; received_date?: string; created_by: string; created_at?: string };
+        Update: { value?: number; description?: string | null; received_date?: string };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;
